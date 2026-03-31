@@ -1,0 +1,39 @@
+# =============================================================================
+# Market Categories
+# Defines which Kalshi series are in scope for trading.
+# Phase 1: temperature only. Phase 2: precipitation.
+# =============================================================================
+
+weather_series:
+  temperature:
+    # Format: KXHIGH{CITY_CODE} = daily high temperature markets
+    # Verify each ticker against the live Kalshi API on startup.
+    - "KXHIGHNY"    # Highest temp in NYC (Central Park — station KNYC)
+    - "KXHIGHCHI"   # Highest temp in Chicago (O'Hare — station KORD)
+    - "KXHIGHLAX"   # Highest temp in Los Angeles (Downtown — station KCQT)
+    - "KXHIGHDC"    # Highest temp in Washington DC (Reagan National — station KDCA)
+    - "KXHIGHHOU"   # Highest temp in Houston
+    - "KXHIGHMIA"   # Highest temp in Miami
+    - "KXHIGHDEN"   # Highest temp in Denver
+    - "KXHIGHPHX"   # Highest temp in Phoenix
+    - "KXHIGHSEA"   # Highest temp in Seattle
+    - "KXHIGHATL"   # Highest temp in Atlanta
+
+  precipitation:
+    # Phase 2 — not traded in v2.0
+    # - "KXRAIN*"
+    # - "KXSNOW*"
+
+# Wildcard patterns the scanner also searches (to discover new series).
+discovery_patterns:
+  - "KXHIGH"
+  - "KXLOW"
+
+# Explicitly excluded categories — never trade these.
+excluded_categories:
+  - "economics"
+  - "financial"
+  - "sports"
+  - "political"
+  - "crypto"
+  - "entertainment"

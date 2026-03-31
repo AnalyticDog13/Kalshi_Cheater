@@ -1,0 +1,126 @@
+# =============================================================================
+# Kalshi Weather Trader — Master Settings
+# All tuneable parameters live here. Code should never have magic numbers.
+# =============================================================================
+
+trading_mode: "demo"  # "demo" or "live" — also requires --live CLI flag for live
+
+api:
+  demo_base_url: "https://demo-api.kalshi.co/trade-api/v2"
+  live_base_url: "https://api.elections.kalshi.com/trade-api/v2"
+  request_timeout_seconds: 30
+  max_retries: 3
+  retry_base_delay_seconds: 1.0   # first retry after 1s; doubles each time (+ jitter)
+  retry_max_delay_seconds: 60.0
+  cache_ttl_market_seconds: 30
+  cache_ttl_portfolio_seconds: 5
+  cache_ttl_orderbook_seconds: 10
+
+scanner:
+  poll_interval_minutes: 5
+  min_volume_fp: 50               # minimum total contracts traded
+  max_spread_dollars: 0.08        # max acceptable bid-ask spread
+  min_resolution_hours: 6         # don't enter markets resolving soon
+  max_resolution_days: 7          # forecast accuracy window
+
+ensemble:
+  base_url: "https://ensemble-api.open-meteo.com/v1/ensemble"
+  # Verified 2026-03-31 against live API. Member counts: GFS=30, ECMWF=50, ICON=39, GEM=20 = 139 total.
+  # Field naming in response: temperature_2m_member{NN}_{model_suffix}
+  # The spec had wrong URL (api.open-meteo.com) and wrong field name format (member_0 vs member01_suffix).
+  models:
+    - "gfs_seamless"
+    - "ecmwf_ifs025"
+    - "icon_seamless"
+    - "gem_global"
+  cache_ttl_minutes: 15           # don't re-fetch Open-Meteo within this window
+  min_members_for_trade: 30       # abort if fewer ensemble members returned
+  high_spread_threshold_f: 12     # ensemble spread above this = "low" confidence
+  medium_spread_threshold_f: 6    # ensemble spread above this = "medium" confidence
+
+ai:
+  model: "claude-sonnet-4-20250514"
+  max_calls_per_day: 50
+  sanity_check_edge_threshold: 0.15   # only call AI when |edge| > 15pp
+  temperature: 0.1
+  max_tokens: 500
+
+edge:
+  min_edge_high_confidence: 0.04
+  min_edge_medium_confidence: 0.06
+  min_edge_low_confidence: 0.10       # effectively skip low confidence trades
+  assumed_slippage: 0.01              # deducted from edge before comparison to minimum
+  fee_multiple_required: 3.0          # edge must cover 3x the taker fee
+  kelly_fraction: 0.25                # quarter-Kelly position sizing
+  extreme_price_lower_bound: 0.02     # don't trade if entry price below this
+  extreme_price_upper_bound: 0.98
+
+risk:
+  max_position_dollars: 50
+  max_total_exposure_dollars: 250
+  max_daily_loss_dollars: 30
+  max_open_orders: 10
+  order_expiry_minutes: 10            # cancel and re-evaluate after this long unfilled
+
+calibration:
+  min_markets_for_bias_correction: 30     # per station per season
+  min_markets_for_isotonic: 80            # per city before fitting
+  min_markets_for_param_optimization: 200 # total before any threshold changes
+  refit_interval_markets: 20             # refit after this many new resolutions
+  holdout_fraction: 0.20                 # temporal holdout for calibration validation
+  bias_decay_lambda: 0.01                # exponential decay; half-life ~70 days
+  seasonal_transition_extra_edge: 0.02   # extra required edge for first 10 markets of new month
+  seasonal_transition_market_count: 10
+
+regime:
+  rolling_window_markets: 50
+  brier_alert_threshold: 0.25
+  beat_market_halt_threshold: 0.48       # halt if beat-market rate falls below this
+  beat_market_alert_threshold: 0.50
+  auto_conservatism_edge_bump: 0.02      # add this to all edge thresholds on degradation
+  auto_conservatism_kelly_reduction: 0.15  # reduce Kelly to this on degradation
+  degradation_periods_before_auto: 3
+
+notifications:
+  enabled: true
+  method: "log_only"   # "telegram", "webhook", or "log_only"
+
+scheduling:
+  high_frequency_windows:
+    - name: "weather_model_00Z"
+      days: ["daily"]
+      start_utc: "03:00"
+      end_utc: "04:00"
+      poll_interval_minutes: 2
+    - name: "weather_model_12Z"
+      days: ["daily"]
+      start_utc: "15:00"
+      end_utc: "16:00"
+      poll_interval_minutes: 2
+  low_frequency_windows:
+    - name: "overnight"
+      days: ["daily"]
+      start_utc: "04:00"
+      end_utc: "10:00"
+      poll_interval_minutes: 15
+  default_poll_interval_minutes: 5
+
+experimentation:
+  # Conservative arm — drives real orders
+  conservative:
+    min_edge_high_confidence: 0.04
+    min_edge_medium_confidence: 0.06
+    assumed_slippage: 0.01
+    fee_multiple_required: 3.0
+    min_ensemble_members: 30
+    min_volume_fp: 50
+    kelly_fraction: 0.25
+  # Exploratory arm — paper-only, NEVER places real orders
+  exploratory:
+    min_edge_high_confidence: 0.025
+    min_edge_medium_confidence: 0.04
+    assumed_slippage: 0.005
+    fee_multiple_required: 1.5
+    min_ensemble_members: 20
+    min_volume_fp: 25
+    kelly_fraction: 0.25

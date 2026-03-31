@@ -6,6 +6,100 @@
 
 ---
 
+## BUILD PROGRESS LOG
+*Last updated: 2026-03-31. Update this section at the start of every new session.*
+
+### Current Status: Phase 1 complete — ready to begin Phase 2 (Trading Logic)
+
+### Test Suite
+**72/72 tests passing.** Run with: `pytest tests/ -v`
+
+### Credentials & Environment
+- `.env` is fully populated (Kalshi demo, Anthropic, Telegram)
+- Kalshi demo API: authenticated, $500 demo balance confirmed
+- Private key: `C:\Users\willi\demo_kalshi_key.pem`
+- Python 3.12 on Windows 11
+- All dependencies installed via `pip install -r requirements.txt`
+- `cryptography` package added to requirements.txt (missing from spec, required by kalshi-python)
+
+### Known API Corrections (spec had these wrong — do NOT revert)
+| Item | Spec said | Reality (verified live) |
+|---|---|---|
+| Open-Meteo ensemble base URL | `api.open-meteo.com/v1/ensemble` | `ensemble-api.open-meteo.com/v1/ensemble` |
+| Member field name format | `temperature_2m_member_0` | `temperature_2m_member01_ecmwf_ifs025_ensemble` |
+| Total ensemble members | ~143 | 139 (GFS=30, ECMWF=50, ICON=39, GEM=20) |
+| Time string format | `2026-03-31T00:00:00` | `2026-03-31T00:00` (no seconds) |
+
+### Files Created
+
+#### Configuration (all complete)
+| File | Status | Notes |
+|---|---|---|
+| `config/settings.yaml` | COMPLETE | All tunable parameters; ensemble URL corrected |
+| `config/station_mapping.yaml` | COMPLETE | 10 cities with NWS station IDs and lat/lon |
+| `config/market_categories.yaml` | COMPLETE | Whitelisted series tickers, exclusions |
+| `requirements.txt` | COMPLETE | Added `cryptography>=42.0.0` vs spec |
+| `.env.example` | COMPLETE | Template; real `.env` populated separately |
+| `.gitignore` | COMPLETE | Excludes `.env`, `*.pem`, `data/*.db`, logs |
+
+#### Source Code (all complete)
+| File | Status | Notes |
+|---|---|---|
+| `src/__init__.py` | COMPLETE | Package marker |
+| `src/data_feeds/__init__.py` | COMPLETE | Package marker |
+| `src/data_feeds/base.py` | COMPLETE | Abstract DataFeed base class |
+| `src/kalshi_client.py` | COMPLETE | SDK wrapper: TTL cache, retry/backoff, pagination, March 2026 price format helpers |
+| `src/data_feeds/weather_ensemble.py` | COMPLETE | Open-Meteo ensemble client; EnsembleResult dataclass; probability computation |
+| `src/data_feeds/weather_observations.py` | COMPLETE | NOAA client: station coordinate validation + post-resolution ground truth |
+| `src/probability_engine.py` | COMPLETE | Orchestrates fetch→bias→probability; BiasDatabase; MarketInfo; batch-efficient estimate_multiple |
+
+#### Tests (all complete)
+| File | Status | Coverage |
+|---|---|---|
+| `tests/__init__.py` | COMPLETE | Package marker |
+| `tests/test_kalshi_client.py` | COMPLETE | 34 tests: cache, retry, price parsers, order guards, pagination, env validation |
+| `tests/test_probability_engine.py` | COMPLETE | 38 tests: EnsembleResult, probability math, bias DB, NOAA parsing, engine integration |
+
+#### Scripts (complete)
+| File | Status | Notes |
+|---|---|---|
+| `scripts/smoke_test.py` | COMPLETE | Validates all credentials + live API connectivity; run after any env change |
+
+### Not Yet Built (Phase 2 — start here after compact)
+Build these in order. Each depends on the previous.
+
+1. **`src/edge_calculator.py`** — fee-aware edge computation (3 scenarios: maker entry/hold, taker entry/hold, round-trip), Kelly sizing, slippage deduction, `EdgeAssessment` dataclass. Tests in `tests/test_edge_calculator.py`.
+
+2. **`src/risk_manager.py`** — 11-point pre-trade checklist, hard stops ($50 per-market, $250 total exposure, $30 daily loss), all limits from settings.yaml. Tests in `tests/test_risk_manager.py`.
+
+3. **`src/market_scanner.py`** — discovers open weather markets per series ticker, filters by liquidity/spread/time-to-resolution, feeds into probability engine, calls edge calculator. No test file yet.
+
+4. **`src/ai_reasoner.py`** — Claude API wrapper, called ONLY when edge >15pp or parsing new settlement criteria. Already have Anthropic key in `.env`.
+
+5. **`src/order_executor.py`** — limit-order-only placement, pre-order staleness check, maker-fill targeting, 10-minute stale order cancellation. Tests in `tests/test_order_executor.py`.
+
+6. **`src/tracker.py`** — SQLite trade recording with full TradeRecord dataclass (see spec section 1.10), Brier score computation, P&L tracking.
+
+7. **`src/calibration_engine.py`** — isotonic regression, bias correction updates, dual-arm experimentation logging.
+
+8. **`src/notifier.py`** — Telegram notifications (bot token + chat ID already in `.env`).
+
+9. **`src/health_monitor.py`** — circuit breakers (3 failures → 5 min pause), rolling performance monitoring.
+
+10. **`src/daemon.py`** — async event loop, scheduling (high-freq at 03:00 and 15:00 UTC, low-freq overnight), graceful shutdown on SIGTERM.
+
+11. **`src/main.py`** — CLI entry point (`start`, `stop`, `status`, `pause`, `resume`).
+
+12. **Scripts:** `scripts/compute_station_bias.py`, `scripts/collect_historical.py`, `scripts/backtest.py`, `scripts/calibration_report.py`, `scripts/pre_live_checklist.py`, `scripts/validate_stations.py`.
+
+### Key Design Decisions Made (not in original spec)
+- Env/mode validation happens BEFORE the kalshi-python import in `_connect()` so tests run without the SDK installed
+- `estimate_multiple()` takes the raw fetch result and passes it directly to computation (not cache lookup) so mocked fetches work correctly in tests
+- `BiasDatabase` lazy-loads on first `.get_bias()` call and silently returns 0.0 if DB missing (no crash on fresh install)
+- Windows terminal encoding: use ASCII strings not unicode symbols in any terminal output scripts
+
+---
+
 ## INSTRUCTIONS FOR CLAUDE CODE
 
 **Read this section before writing any code. It defines how you should work with the developer.**

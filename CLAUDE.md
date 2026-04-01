@@ -9,16 +9,16 @@
 ## BUILD PROGRESS LOG
 *Last updated: 2026-04-01. Update this section at the start of every new session.*
 
-### Current Status: Phase 2 in progress — steps 1–7 complete, next is step 8: `src/notifier.py`
+### Current Status: Phase 2 in progress — steps 1–8 complete, next is step 9: `src/health_monitor.py`
 
 ### NEXT STEP (read this first on new session)
-**Build `src/notifier.py` — Phase 2 step 8.**
-- Telegram notifications via Bot API (`https://api.telegram.org/bot{token}/sendMessage`).
-- Credentials from env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
-- Required methods (all async): `send_trade_placed(order_result)`, `send_trade_outcome(ticker, outcome, pnl)`, `send_daily_summary(pnl, brier, open_positions)`, `send_alert(message)`, `send_circuit_breaker(service, reason)`.
-- Fail silently: any Telegram error must be caught and logged — notifications must NEVER block trading.
-- `method: "log_only"` mode (from settings.yaml): skip all HTTP calls and just log at INFO level. Used in testing.
-- Tests in `tests/test_notifier.py` — mock httpx, test log_only mode, test fail-silent behavior.
+**Build `src/health_monitor.py` — Phase 2 step 9.**
+- Circuit breakers for 3 external services: `kalshi_api`, `open_meteo`, `noaa`.
+- Each breaker: trips after 3 consecutive failures, pauses 5 minutes, then auto-recovers on next success.
+- `HealthMonitor` class: `record_success(service)`, `record_failure(service)`, `is_open(service) -> bool` (True = tripped = block calls), `get_status() -> dict`.
+- Stateful but NO async, NO I/O — pure in-memory state with `datetime` for timing.
+- Integrates with `Notifier`: inject notifier, call `send_circuit_breaker()` on trip (async — callers must await or use `asyncio.create_task`).
+- Tests in `tests/test_health_monitor.py`.
 
 ### Build Checklist — Phase 2
 | Step | File | Status |
@@ -30,14 +30,14 @@
 | 5 | `src/order_executor.py` | ✅ DONE |
 | 6 | `src/tracker.py` | ✅ DONE |
 | 7 | `src/calibration_engine.py` | ✅ DONE |
-| 8 | `src/notifier.py` | ⬅ NEXT |
-| 9 | `src/health_monitor.py` | pending |
+| 8 | `src/notifier.py` | ✅ DONE |
+| 9 | `src/health_monitor.py` | ⬅ NEXT |
 | 10 | `src/daemon.py` | pending |
 | 11 | `src/main.py` | pending |
 | 12 | 6 scripts | pending |
 
 ### Test Suite
-**440/440 tests passing.** Run with: `pytest tests/ -q`
+**478/478 tests passing.** Run with: `pytest tests/ -q`
 
 ### Credentials & Environment
 - `.env` is fully populated (Kalshi demo, Anthropic, Telegram)

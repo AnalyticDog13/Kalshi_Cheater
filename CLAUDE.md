@@ -9,16 +9,18 @@
 ## BUILD PROGRESS LOG
 *Last updated: 2026-04-01. Update this section at the start of every new session.*
 
-### Current Status: Phase 2 in progress — steps 1–8 complete, next is step 9: `src/health_monitor.py`
+### Current Status: Phase 2 in progress — steps 1–10 complete, next is step 11: `src/main.py`
 
 ### NEXT STEP (read this first on new session)
-**Build `src/health_monitor.py` — Phase 2 step 9.**
-- Circuit breakers for 3 external services: `kalshi_api`, `open_meteo`, `noaa`.
-- Each breaker: trips after 3 consecutive failures, pauses 5 minutes, then auto-recovers on next success.
-- `HealthMonitor` class: `record_success(service)`, `record_failure(service)`, `is_open(service) -> bool` (True = tripped = block calls), `get_status() -> dict`.
-- Stateful but NO async, NO I/O — pure in-memory state with `datetime` for timing.
-- Integrates with `Notifier`: inject notifier, call `send_circuit_breaker()` on trip (async — callers must await or use `asyncio.create_task`).
-- Tests in `tests/test_health_monitor.py`.
+**Build `src/main.py` — Phase 2 step 11.**
+- Click CLI with 5 subcommands: `start`, `stop`, `status`, `pause`, `resume`.
+- `start`: load config, create TradingDaemon, run asyncio.run(daemon.run()). Accepts --config-dir, --db-path, --live flags.
+- `stop`: send SIGTERM to the running daemon PID (read from a PID file written on start).
+- `status`: read tracker DB and health monitor state; print open positions, daily P&L, Brier score, circuit breaker states.
+- `pause`: write a pause flag file that the daemon checks at the top of each cycle (scans but does not execute orders).
+- `resume`: remove the pause flag file.
+- PID file location: `./data/daemon.pid`. Written on daemon start, removed on clean shutdown.
+- No tests required for main.py (thin CLI wrapper).
 
 ### Build Checklist — Phase 2
 | Step | File | Status |
@@ -31,13 +33,13 @@
 | 6 | `src/tracker.py` | ✅ DONE |
 | 7 | `src/calibration_engine.py` | ✅ DONE |
 | 8 | `src/notifier.py` | ✅ DONE |
-| 9 | `src/health_monitor.py` | ⬅ NEXT |
-| 10 | `src/daemon.py` | pending |
-| 11 | `src/main.py` | pending |
+| 9 | `src/health_monitor.py` | ✅ DONE |
+| 10 | `src/daemon.py` | ✅ DONE |
+| 11 | `src/main.py` | ⬅ NEXT |
 | 12 | 6 scripts | pending |
 
 ### Test Suite
-**478/478 tests passing.** Run with: `pytest tests/ -q`
+**518/518 tests passing.** Run with: `pytest tests/ -q`
 
 ### Credentials & Environment
 - `.env` is fully populated (Kalshi demo, Anthropic, Telegram)
@@ -70,7 +72,7 @@
 | `.env.example` | Template; real `.env` populated with live credentials |
 | `.gitignore` | Excludes `.env`, `*.pem`, `data/*.db`, logs |
 
-#### Source Code — COMPLETE (12 files)
+#### Source Code — COMPLETE (16 files)
 | File | Key Contents |
 |------|-------------|
 | `src/__init__.py` | Package marker |
@@ -82,21 +84,21 @@
 | `src/probability_engine.py` | fetch→bias→probability pipeline; `BiasDatabase`; `MarketInfo`; batch `estimate_multiple()` |
 | `src/edge_calculator.py` | `EdgeParams`, `EdgeAssessment`, `compute_edge()`; 3-scenario fee math; quarter-Kelly sizing; SANITY_CHECK at >15pp |
 | `src/risk_manager.py` | `RiskLimits`, `RiskManager`; 11-point pre-trade checklist; stateful exposure/P&L; NO async |
-| `src/market_scanner.py` | Full scan pipeline; ticker/title parsing; below-market probability flip; direction detection; AI stub wired |
+| `src/market_scanner.py` | Full scan pipeline; ticker/title parsing; below-market probability flip; direction detection; AI wired |
 | `src/ai_reasoner.py` | `AIParams`, `SanityCheckResult`, `AIReasoner`; veto-only; 50-call/day budget; fail-open on any error |
 | `src/order_executor.py` | `OrderResult`, `OrderExecutor`; staleness guard (2¢); maker pricing; depth cap; 10-min stale cancellation |
+| `src/tracker.py` | `TradeRecord`; `record_trade`, `update_fill`, `record_outcome`, `compute_brier_score`, `compute_daily_pnl`, `get_open_positions`; sqlite-utils; dual-arm |
+| `src/calibration_engine.py` | `BiasDatabase` (per-station/month °F bias, lazy-load); `CalibrationEngine` (isotonic regression, temporal holdout, pickle persistence, auto-refit every 20 obs) |
+| `src/notifier.py` | `NotifierConfig`, `Notifier`; async Telegram Bot API; 5 methods; fail-silent; `log_only` mode |
+| `src/health_monitor.py` | `HealthMonitor`; 3-state circuit breakers (CLOSED→OPEN→HALF-OPEN→CLOSED); 3 failures trip, 5-min cooldown; `record_failure()` returns True on trip |
+| `src/daemon.py` | `TradingDaemon`; full async pipeline; dual-arm eval; SIGINT/SIGTERM graceful shutdown; high-freq windows; fill sync; daily summary; circuit breaker integration |
 
-#### Source Code — NOT YET BUILT (7 files)
+#### Source Code — NOT YET BUILT (1 file)
 | File | What it does |
 |------|-------------|
-| `src/tracker.py` | SQLite `TradeRecord`; `record_trade`, `update_fill`, `record_outcome`, `compute_brier_score`, `compute_daily_pnl`, `get_open_positions`; dual-arm logging |
-| `src/calibration_engine.py` | Isotonic regression; bias correction updates |
-| `src/notifier.py` | Telegram notifications |
-| `src/health_monitor.py` | Circuit breakers (3 failures → 5 min pause) |
-| `src/daemon.py` | Async event loop; high-freq 03:00+15:00 UTC windows; graceful shutdown |
 | `src/main.py` | CLI: `start`, `stop`, `status`, `pause`, `resume` |
 
-#### Tests — COMPLETE (8 files, 347 tests total)
+#### Tests — COMPLETE (12 files, 518 tests total)
 | File | Count | Key coverage |
 |------|-------|-------------|
 | `tests/__init__.py` | — | Package marker |
@@ -108,12 +110,14 @@
 | `tests/test_ai_reasoner.py` | 36 | Budget, daily reset, fail-open fallbacks, markdown JSON, adjusted_probability |
 | `tests/test_order_executor.py` | 39 | Staleness guard, maker pricing, empty-book, depth cap, stale cancellation |
 | `tests/test_tracker.py` | 54 | Schema, record_trade, update_fill, record_outcome P&L, Brier score, daily P&L, open positions, datetime helpers |
+| `tests/test_calibration_engine.py` | 39 | BiasDatabase CRUD, lazy-load, CalibrationEngine fit/calibrate/holdout/refit, cross-instance persistence |
+| `tests/test_notifier.py` | 38 | log_only mode, Telegram HTTP mocking, fail-silent on errors/timeouts, message content |
+| `tests/test_health_monitor.py` | 40 | All 3 state transitions, multi-service independence, cooldown timing, HALF-OPEN recovery, manual reset |
 
 #### Tests — NOT YET BUILT
 | File | For |
 |------|-----|
-| `tests/test_tracker.py` | ⬅ NEXT — in-memory SQLite |
-| `tests/test_calibration_engine.py` | pending |
+| *(none — daemon.py and main.py do not require unit tests per spec)* | |
 
 #### Scripts
 | File | Status | Notes |

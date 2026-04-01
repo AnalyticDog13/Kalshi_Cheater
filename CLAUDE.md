@@ -9,10 +9,20 @@
 ## BUILD PROGRESS LOG
 *Last updated: 2026-03-31. Update this section at the start of every new session.*
 
-### Current Status: Phase 1 complete — ready to begin Phase 2 (Trading Logic)
+### Current Status: Phase 2 in progress — steps 1–3 complete, next is step 4: `src/ai_reasoner.py`
+
+### NEXT STEP (read this first on new session)
+**Build `src/ai_reasoner.py` — Phase 2 step 4.**
+- Claude API wrapper. Called ONLY when `edge.recommendation == "SANITY_CHECK"` (edge >15pp) OR when parsing settlement criteria for a new series.
+- Anthropic API key already in `.env` as `ANTHROPIC_API_KEY`.
+- The scanner already has a stub block marked `# TODO: AI SANITY CHECK` in `_scan_series()` — wire `AIReasoner` into it once built.
+- See spec section 1.6 for the full prompt and JSON response format (`proceed`, `concern`, `adjusted_probability`).
+- Hard limit: `max_calls_per_day = 50` (from `settings.yaml ai.max_calls_per_day`).
+- Model: `claude-sonnet-4-20250514` (from `settings.yaml ai.model`). **Use the model ID from settings, never hardcode.**
+- Write tests in `tests/test_ai_reasoner.py` — mock the Anthropic client, test call budget, JSON parse failure fallback, and that it defaults to `proceed=True` on any error.
 
 ### Test Suite
-**72/72 tests passing.** Run with: `pytest tests/ -v`
+**272/272 tests passing.** Run with: `pytest tests/ -v`
 
 ### Credentials & Environment
 - `.env` is fully populated (Kalshi demo, Anthropic, Telegram)
@@ -29,6 +39,9 @@
 | Member field name format | `temperature_2m_member_0` | `temperature_2m_member01_ecmwf_ifs025_ensemble` |
 | Total ensemble members | ~143 | 139 (GFS=30, ECMWF=50, ICON=39, GEM=20) |
 | Time string format | `2026-03-31T00:00:00` | `2026-03-31T00:00` (no seconds) |
+| Kalshi ticker format | (unspecified) | `KXHIGHNY-26APR01-T79` (verified live) |
+| Kalshi title format | (unspecified) | `"Will the **high temp in NYC** be >79° on Apr 1, 2026?"` |
+| Kalshi `close_time` | (unspecified) | datetime object, day AFTER measurement date, ~05:00 UTC |
 
 ### Files Created
 
@@ -52,51 +65,56 @@
 | `src/data_feeds/weather_ensemble.py` | COMPLETE | Open-Meteo ensemble client; EnsembleResult dataclass; probability computation |
 | `src/data_feeds/weather_observations.py` | COMPLETE | NOAA client: station coordinate validation + post-resolution ground truth |
 | `src/probability_engine.py` | COMPLETE | Orchestrates fetch→bias→probability; BiasDatabase; MarketInfo; batch-efficient estimate_multiple |
+| `src/edge_calculator.py` | COMPLETE | EdgeParams, EdgeAssessment, compute_edge; 3-scenario fee math, Kelly sizing, SANITY_CHECK threshold |
+| `src/risk_manager.py` | COMPLETE | RiskLimits, RiskManager; 11-point checklist + open-orders cap; stateful exposure/P&L tracking |
+| `src/market_scanner.py` | COMPLETE | MarketScanner, ScanResult, ScanSummary; full pipeline: discover→filter→estimate→edge→risk; direction flip for below-markets |
 
 #### Tests (all complete)
 | File | Status | Coverage |
 |---|---|---|
 | `tests/__init__.py` | COMPLETE | Package marker |
-| `tests/test_kalshi_client.py` | COMPLETE | 34 tests: cache, retry, price parsers, order guards, pagination, env validation |
-| `tests/test_probability_engine.py` | COMPLETE | 38 tests: EnsembleResult, probability math, bias DB, NOAA parsing, engine integration |
+| `tests/test_kalshi_client.py` | COMPLETE | 34 tests |
+| `tests/test_probability_engine.py` | COMPLETE | 38 tests |
+| `tests/test_edge_calculator.py` | COMPLETE | 55 tests |
+| `tests/test_risk_manager.py` | COMPLETE | 63 tests |
+| `tests/test_market_scanner.py` | COMPLETE | 82 tests: threshold/date/direction parsing, below-market probability flip, full scan pipeline |
 
 #### Scripts (complete)
 | File | Status | Notes |
 |---|---|---|
 | `scripts/smoke_test.py` | COMPLETE | Validates all credentials + live API connectivity; run after any env change |
 
-### Not Yet Built (Phase 2 — start here after compact)
-Build these in order. Each depends on the previous.
-
-1. **`src/edge_calculator.py`** — fee-aware edge computation (3 scenarios: maker entry/hold, taker entry/hold, round-trip), Kelly sizing, slippage deduction, `EdgeAssessment` dataclass. Tests in `tests/test_edge_calculator.py`.
-
-2. **`src/risk_manager.py`** — 11-point pre-trade checklist, hard stops ($50 per-market, $250 total exposure, $30 daily loss), all limits from settings.yaml. Tests in `tests/test_risk_manager.py`.
-
-3. **`src/market_scanner.py`** — discovers open weather markets per series ticker, filters by liquidity/spread/time-to-resolution, feeds into probability engine, calls edge calculator. No test file yet.
-
-4. **`src/ai_reasoner.py`** — Claude API wrapper, called ONLY when edge >15pp or parsing new settlement criteria. Already have Anthropic key in `.env`.
-
-5. **`src/order_executor.py`** — limit-order-only placement, pre-order staleness check, maker-fill targeting, 10-minute stale order cancellation. Tests in `tests/test_order_executor.py`.
-
-6. **`src/tracker.py`** — SQLite trade recording with full TradeRecord dataclass (see spec section 1.10), Brier score computation, P&L tracking.
-
-7. **`src/calibration_engine.py`** — isotonic regression, bias correction updates, dual-arm experimentation logging.
-
-8. **`src/notifier.py`** — Telegram notifications (bot token + chat ID already in `.env`).
-
-9. **`src/health_monitor.py`** — circuit breakers (3 failures → 5 min pause), rolling performance monitoring.
-
-10. **`src/daemon.py`** — async event loop, scheduling (high-freq at 03:00 and 15:00 UTC, low-freq overnight), graceful shutdown on SIGTERM.
-
-11. **`src/main.py`** — CLI entry point (`start`, `stop`, `status`, `pause`, `resume`).
-
-12. **Scripts:** `scripts/compute_station_bias.py`, `scripts/collect_historical.py`, `scripts/backtest.py`, `scripts/calibration_report.py`, `scripts/pre_live_checklist.py`, `scripts/validate_stations.py`.
+### Not Yet Built (Phase 2 — steps 4–12)
+1. ~~`src/edge_calculator.py`~~ DONE
+2. ~~`src/risk_manager.py`~~ DONE
+3. ~~`src/market_scanner.py`~~ DONE
+4. **`src/ai_reasoner.py`** ← NEXT (see NEXT STEP section above)
+5. **`src/order_executor.py`** — limit-order-only, staleness guard, stale order cancellation. Tests in `tests/test_order_executor.py`.
+6. **`src/tracker.py`** — SQLite trade recording, full TradeRecord (spec §1.10), Brier score, P&L.
+7. **`src/calibration_engine.py`** — isotonic regression, bias correction updates, dual-arm logging.
+8. **`src/notifier.py`** — Telegram (bot token + chat ID in `.env`).
+9. **`src/health_monitor.py`** — circuit breakers (3 failures → 5 min pause), rolling monitoring.
+10. **`src/daemon.py`** — async event loop, high-freq 03:00+15:00 UTC, graceful SIGTERM shutdown.
+11. **`src/main.py`** — CLI: `start`, `stop`, `status`, `pause`, `resume`.
+12. **Scripts:** `compute_station_bias.py`, `collect_historical.py`, `backtest.py`, `calibration_report.py`, `pre_live_checklist.py`, `validate_stations.py`.
 
 ### Key Design Decisions Made (not in original spec)
 - Env/mode validation happens BEFORE the kalshi-python import in `_connect()` so tests run without the SDK installed
 - `estimate_multiple()` takes the raw fetch result and passes it directly to computation (not cache lookup) so mocked fetches work correctly in tests
 - `BiasDatabase` lazy-loads on first `.get_bias()` call and silently returns 0.0 if DB missing (no crash on fresh install)
 - Windows terminal encoding: use ASCII strings not unicode symbols in any terminal output scripts
+- `EdgeParams.from_settings()` reads `ai.sanity_check_edge_threshold` (not `edge.*`) since that's where it lives in settings.yaml
+- `sanity_check_edge_threshold` added to EdgeParams (spec mentioned it in ai section, not edge section — consolidated)
+- `RiskManager.check_trade()` evaluates ALL 11 checks without short-circuit so operators see every failing check at once
+- Risk manager is stateful (tracks exposure + daily P&L) and has NO async/IO — pure Python, fully testable without mocks
+- **`MarketInfo.resolution_date` comes from the ticker date segment, NOT `close_time.date()`** — verified live: `close_time` is the day AFTER the measurement date (e.g. ticker `KXHIGHNY-26APR01-T79` measures Apr 1, but `close_time = 2026-04-02 04:59:00+00:00`). Using `close_time.date()` would cause the probability engine to forecast the wrong day. `parse_measurement_date_from_ticker()` parses `26APR01` → `date(2026, 4, 1)`. `close_time` is only used for `hours_to_resolution` (when can we still trade).
+- **Fee coefficient fetched from series `fee_multiplier` field** via `get_series()` (cached 10 min). Falls back to `0.07` if field absent. Scanner calls this once per series per cycle.
+- **Threshold parsed from market ticker first, then title/subtitle** — ticker regex `[_-]T(\d+)` (e.g. `KXHIGHNY-26MAR31-T75` → 75.0), then title regex `(\d+)\s*[°]?\s*[Ff]`. Markets where both fail are skipped with a WARNING log. **If titles look different than expected, fix the regex in `_parse_threshold_from_text()` in `market_scanner.py` — it is the only place to change.**
+- **AI reasoner is a stub in the scanner** — `MarketScanner.__init__` accepts `ai_reasoner=None`. When `ai_reasoner` is `None`, `SANITY_CHECK` recommendations pass through to the caller unchanged (daemon/executor decides). **TODO: Wire up `AIReasoner` in Phase 2 step 4 when `ai_reasoner.py` is built — see the commented block in `MarketScanner.scan()` marked `# TODO: AI SANITY CHECK`.**
+- **`scan()` returns ALL evaluated results** (approved + rejected) — caller filters on `result.risk.approved`. This supports the dual-arm experimentation log (spec section 3.5): the daemon logs both arms' assessments for every scan.
+- **Kalshi market direction verified live** — titles use `>79°` (above) or `<72°` (below). `parse_direction_from_text()` detects `<` before a digit → "below". For "below" markets, P(YES) = 1 − P(max ≥ threshold). The scanner stores the raw unflipped ensemble in `ScanResult.ensemble` (for calibration) and passes the flipped probability to `compute_edge()`. `copy.copy()` is used instead of `dataclasses.replace()` so that test mocks also work.
+- **Kalshi `close_time` is a datetime object** (not a string) from the SDK — verified live format: `datetime(2026, 4, 2, 4, 59, tzinfo=utc)`. `parse_close_time()` handles both datetime objects and all ISO8601 string variants including space separators.
+- **Known API corrections verified live 2026-03-31:** ticker format `KXHIGHNY-26APR01-T79`; title format `"Will the **high temp in NYC** be >79° on Apr 1, 2026?"`; subtitle `"80° or above"`; close_time is day-after measurement at ~05:00 UTC.
 
 ---
 

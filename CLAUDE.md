@@ -7,19 +7,163 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-01 (session 2). Update this section at the start of every new session.*
+*Last updated: 2026-04-01 (session 3 — Phase 2 complete). Update this section at the start of every new session.*
 
-### Current Status: Phase 2 complete — all 11 source files built. Next: 6 scripts (step 12).
+### Current Status: ALL COMPLETE — Phase 2 fully done. All 17 source files + 6 scripts + smoke_test built.
 
 ### NEXT STEP (read this first on new session)
-**Build the 6 scripts — Phase 2 step 12.**
-Build these in order:
-1. `scripts/validate_stations.py` — verify station_mapping.yaml against live Kalshi series settlement_sources; flag mismatches
-2. `scripts/compute_station_bias.py` — fetch NOAA historical observations + Open-Meteo historical forecasts; compute per-station/month bias; write to station_bias.db
-3. `scripts/collect_historical.py` — scrape Kalshi historical weather markets (settled); store market snapshots for backtesting
-4. `scripts/backtest.py` — run the full pipeline (scanner→edge→risk) on historical snapshots; report hypothetical P&L, Brier, fill rate
-5. `scripts/calibration_report.py` — read trades.db; print Brier score, beat-market rate, dual-arm comparison, per-city breakdown
-6. `scripts/pre_live_checklist.py` — automated readiness check: all 10 items from spec §2.4; print PASS/FAIL per item
+**Phase 2 is complete. See "Phase 3: Getting It Running" section below for what to do next.**
+
+---
+
+## PHASE 3: GETTING IT RUNNING (Operational Checklist)
+
+*The code is done. Now you need to run it, collect data, and evaluate before considering live trading.*
+
+### Step 1 — Verify Everything Works (30 minutes, one time)
+
+Run these in order. Fix any failures before proceeding.
+
+```bash
+# 1. Verify all API credentials and connections
+python scripts/smoke_test.py
+
+# 2. Verify station mappings match NOAA and Kalshi sources
+python scripts/validate_stations.py
+
+# 3. Build initial bias corrections (takes ~10-15 min, makes API calls)
+python scripts/compute_station_bias.py --days-back 365
+```
+
+**What to watch for in validate_stations.py:**
+- WARN rows are usually OK — small coordinate differences between NOAA and our config
+- FAIL rows mean the station_id is wrong and must be fixed in `config/station_mapping.yaml` before trading
+- If Kalshi API call fails (demo API doesn't have the series), that's OK — NOAA check is the critical one
+
+**What to watch for in compute_station_bias.py:**
+- "0 months stored" for a city = NOAA has no data for that station, or station ID is wrong
+- Biases larger than ±4°F are suspicious — may indicate wrong station coordinates
+- The script writes to `data/station_bias.db`; check it exists after the script finishes
+
+### Step 2 — First Daemon Run (watch the logs live)
+
+```bash
+# Start daemon in demo mode, log to console
+python -m src.main start
+
+# In a separate terminal — check status
+python -m src.main status
+```
+
+**What to watch in the logs (first 2-3 cycles):**
+
+| Log message | Meaning |
+|-------------|---------|
+| `=== Cycle 1 @ ...` | Daemon started, first cycle running |
+| `Scan: fetched=N, evaluated=M, approved=K` | Scanner working; K=approved trades this cycle |
+| `kalshi_api circuit OPEN` | Kalshi API unreachable; wait for 5-min cooldown |
+| `open_meteo circuit OPEN` | Open-Meteo unreachable; check internet/rate limits |
+| `Edge evaporated` | Market moved before order; normal, not an error |
+| `[TRADE PLACED]` in Telegram | First real paper-trade order submitted |
+| `Service kalshi_api failure 1/3` | API hiccup; not tripped yet, just watching |
+
+**Common first-run issues and fixes:**
+
+| Problem | Fix |
+|---------|-----|
+| `KALSHI_DEMO_API_KEY_ID not set` | Check `.env` is loaded; re-run `python scripts/smoke_test.py` |
+| `approved=0` every cycle | Normal if no markets have sufficient edge right now |
+| `filtered_no_station=N` (high N) | Station mapping missing entries; add series to `station_mapping.yaml` |
+| `parse_threshold_from_ticker` warnings | Kalshi changed ticker format; fix regex in `market_scanner.py:_parse_threshold_from_text()` |
+| `open_meteo circuit OPEN` immediately | Open-Meteo rate-limited; daemon will auto-recover in 5 min |
+
+### Step 3 — Deploy for Continuous Operation (Week 1+)
+
+The system **cannot run on a laptop that sleeps**. Options:
+
+**Option A — Keep your Windows machine running** (simplest for now):
+```bash
+# Run in background, log to file
+python -m src.main start > logs/daemon.log 2>&1
+```
+Create `logs/` directory first: `mkdir logs`
+
+**Option B — Deploy to a VPS** (recommended for real trading):
+- DigitalOcean, Linode, or Hetzner — ~$6/month for a basic droplet
+- Copy the project, `.env`, and PEM key to the server
+- Run as a systemd service so it restarts on crash
+- Ask Claude Code to write the systemd service file when you're ready
+
+**Monitoring while running:**
+```bash
+# Check current status
+python -m src.main status
+
+# View recent log output
+tail -f logs/daemon.log
+
+# Pause trading without stopping the daemon (e.g. during Kalshi maintenance)
+python -m src.main pause
+python -m src.main resume
+
+# Graceful stop
+python -m src.main stop
+```
+
+### Step 4 — Evaluate After ~100 Resolved Markets (2-4 weeks)
+
+Weather markets in the system's cities typically resolve once per day each. With 10 cities and daily markets, you should accumulate ~100+ resolved markets within 2-4 weeks of continuous operation.
+
+```bash
+# Run after the daemon has been running for 2+ weeks
+python scripts/calibration_report.py
+```
+
+**Key metrics and what they mean:**
+
+| Metric | Target | If failing |
+|--------|--------|------------|
+| Brier score (rolling 50) | < 0.18 | Ensemble is mis-calibrated; run `compute_station_bias.py` with more data |
+| Beat-market rate | > 55% | Our probabilities are better than the market's |
+| Beat-market rate (rolling) | > 50% | If < 48%, system auto-raises edge thresholds; if sustained, halt |
+| Maker fill rate | > 70% | If low, orders are expiring unfilled; may need to be more aggressive on price |
+| ROI | Positive | If negative after 100+ trades, there may be a systematic issue |
+| Dual-arm comparison | Exp arm ≈ Cons arm | If exp arm much better, guardrails are too tight |
+
+Also run `collect_historical.py` to backfill historical market data, then `backtest.py --mode hindcast` for a quick sanity check (see backtest caveat about lookahead bias).
+
+### Step 5 — Live Trading (After Metrics Confirmed)
+
+Only proceed after 100+ resolved markets with sustained positive metrics.
+
+```bash
+python scripts/pre_live_checklist.py
+```
+
+All 10 checks must pass. The script requires a typed confirmation phrase. After that:
+1. Set `TRADING_MODE=live` in `.env`
+2. Add `KALSHI_LIVE_API_KEY_ID` and `KALSHI_LIVE_PRIVATE_KEY_PATH` to `.env`
+3. Back up your database: `cp data/trades.db data/trades.db.bak`
+4. Start with live flag: `python -m src.main start --live`
+5. Maximum exposure starts at $50 (shadow mode) — do not increase until 200+ total resolved markets
+
+---
+
+## KNOWN THINGS THAT MAY NEED FIXING AFTER FIRST RUN
+
+These are runtime issues that only reveal themselves when talking to live APIs. Claude Code can fix any of these in a new session — just describe the error.
+
+1. **Kalshi SDK API changes**: If Kalshi updates their SDK or API, method names may change. Check `src/kalshi_client.py` and the SDK changelog.
+
+2. **Open-Meteo model member count**: The system expects 139 members (GFS=30, ECMWF=50, ICON=39, GEM=20). If Open-Meteo changes their ensemble format again, `compute_threshold_probability()` in `weather_ensemble.py` will need updating. The log will show `total_members=N` — if N < 30, the scanner will skip the market.
+
+3. **Kalshi ticker format changes**: All parsing logic is in `parse_threshold_from_ticker()` and `parse_measurement_date_from_ticker()` in `market_scanner.py`. If these return None for most markets and `filtered_parse_error` is high in scan logs, fix the regex there.
+
+4. **No markets with edge**: Totally normal early on. The system is designed to skip rather than force trades. If you run for 2 weeks and see 0 approved trades, check: (a) are weather markets open and liquid on Kalshi right now? (b) is the ensemble spread too wide (low confidence)? (c) are edge thresholds too high for current market conditions?
+
+5. **Telegram not sending**: Verify `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env`. The daemon will still function; notifications are fire-and-forget and never block trading.
+
+6. **Database grows large**: `data/trades.db` will grow slowly but that's fine. SQLite handles millions of rows without issue.
 
 ### Build Checklist — Phase 2
 | Step | File | Status |
@@ -35,7 +179,7 @@ Build these in order:
 | 9 | `src/health_monitor.py` | ✅ DONE |
 | 10 | `src/daemon.py` | ✅ DONE |
 | 11 | `src/main.py` | ✅ DONE |
-| 12 | 6 scripts | ⬅ NEXT |
+| 12 | 6 scripts | ✅ DONE |
 
 ### Test Suite
 **518/518 tests passing.** Run with: `pytest tests/ -q`

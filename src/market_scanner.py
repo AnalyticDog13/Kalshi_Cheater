@@ -50,6 +50,7 @@ from src.data_feeds.weather_ensemble import EnsembleResult
 from src.edge_calculator import EdgeAssessment, EdgeParams, compute_edge
 from src.probability_engine import MarketInfo, ProbabilityEngine
 from src.risk_manager import RiskCheckOutcome, RiskLimits, RiskManager
+from src.ai_reasoner import AIReasoner  # noqa: E402 — imported after core modules
 
 logger = logging.getLogger(__name__)
 
@@ -302,7 +303,7 @@ class MarketScanner:
         risk_limits: RiskLimits,
         station_mapping: dict[str, dict],
         series_tickers: list[str],
-        ai_reasoner: Any = None,
+        ai_reasoner: AIReasoner | None = None,
     ) -> None:
         self.kalshi_client = kalshi_client
         self.probability_engine = probability_engine
@@ -507,27 +508,39 @@ class MarketScanner:
                 open_orders_count=open_orders_count,
             )
 
-            # TODO: AI SANITY CHECK — wire up when ai_reasoner.py is built (Phase 2 step 4)
-            # If edge.recommendation == "SANITY_CHECK" and self.ai_reasoner is not None:
-            #     station_name = station_config.get("city", series_ticker)
-            #     direction_str = "above" if direction == "above" else "below"
-            #     ensemble_details = f"{ensemble.total_members} members, spread={ensemble.ensemble_spread:.1f}F"
-            #     ai_result = await self.ai_reasoner.sanity_check(
-            #         market_description=(
-            #             f"{station_name} high temp {direction_str} {market_info.threshold_value}F "
-            #             f"on {market_info.resolution_date}"
-            #         ),
-            #         ensemble_prob=ensemble_for_edge.probability,
-            #         market_price=market_price,
-            #         ensemble_details=ensemble_details,
-            #     )
-            #     if not ai_result.get("proceed", True):
-            #         concern = ai_result.get("concern", "AI flagged concern")
-            #         risk = RiskCheckOutcome(
-            #             approved=False,
-            #             failed_checks=[f"AI SANITY CHECK FAIL: {concern}"],
-            #             notes=risk.notes,
-            #         )
+            # AI SANITY CHECK — only runs when edge is suspiciously large (>15pp)
+            # and an AIReasoner has been injected. When ai_reasoner=None the
+            # SANITY_CHECK recommendation passes through to the caller unchanged.
+            if edge.recommendation == "SANITY_CHECK" and self.ai_reasoner is not None:
+                station_name = station_config.get("city", series_ticker)
+                direction_str = "above" if direction == "above" else "below"
+                ensemble_details = (
+                    f"{ensemble.total_members} members, "
+                    f"spread={ensemble.ensemble_spread:.1f}F"
+                )
+                ai_result = await self.ai_reasoner.sanity_check(
+                    market_description=(
+                        f"{station_name} high temp {direction_str} "
+                        f"{market_info.threshold_value}F on {market_info.resolution_date}"
+                    ),
+                    ensemble_prob=ensemble_for_edge.probability,
+                    market_price=market_price,
+                    ensemble_details=ensemble_details,
+                )
+                # FUTURE IMPROVEMENT: adjusted_probability
+                # ai_result.adjusted_probability is logged inside AIReasoner but
+                # is NOT used to reprice the edge or position sizing here (Option B:
+                # AI is a veto-only gatekeeper). If this system is to be improved,
+                # consider re-running compute_edge() with ai_result.adjusted_probability
+                # when proceed=True and the adjusted value differs materially.
+                # See the FUTURE IMPROVEMENT note at the top of src/ai_reasoner.py.
+                if not ai_result.proceed:
+                    concern = ai_result.concern or "AI flagged concern"
+                    risk = RiskCheckOutcome(
+                        approved=False,
+                        failed_checks=[f"AI SANITY CHECK FAIL: {concern}"],
+                        notes=risk.notes,
+                    )
 
             results.append(ScanResult(
                 market_ticker=market_info.ticker,

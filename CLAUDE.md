@@ -9,16 +9,16 @@
 ## BUILD PROGRESS LOG
 *Last updated: 2026-04-01. Update this section at the start of every new session.*
 
-### Current Status: Phase 2 in progress — steps 1–6 complete, next is step 7: `src/calibration_engine.py`
+### Current Status: Phase 2 in progress — steps 1–7 complete, next is step 8: `src/notifier.py`
 
 ### NEXT STEP (read this first on new session)
-**Build `src/calibration_engine.py` — Phase 2 step 7.**
-- Isotonic regression calibration (scikit-learn) for ensemble probability estimates.
-- Per-station, per-month bias correction database (`data/station_bias.db`).
-- `BiasDatabase`: `update_bias(station_id, month, bias_f)`, `get_bias(station_id, month) -> float`. Lazy-loads; returns 0.0 if DB missing.
-- `CalibrationEngine`: `add_observation(ticker, ensemble_prob, actual_outcome, city)`, `fit_city(city)`, `calibrate(city, raw_prob) -> float`. Min 80 resolved markets per city before fitting; holdout = most recent 20% (temporal split, not random).
-- Both stored in SQLite via sqlite-utils. No async.
-- Tests in `tests/test_calibration_engine.py`.
+**Build `src/notifier.py` — Phase 2 step 8.**
+- Telegram notifications via Bot API (`https://api.telegram.org/bot{token}/sendMessage`).
+- Credentials from env: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`.
+- Required methods (all async): `send_trade_placed(order_result)`, `send_trade_outcome(ticker, outcome, pnl)`, `send_daily_summary(pnl, brier, open_positions)`, `send_alert(message)`, `send_circuit_breaker(service, reason)`.
+- Fail silently: any Telegram error must be caught and logged — notifications must NEVER block trading.
+- `method: "log_only"` mode (from settings.yaml): skip all HTTP calls and just log at INFO level. Used in testing.
+- Tests in `tests/test_notifier.py` — mock httpx, test log_only mode, test fail-silent behavior.
 
 ### Build Checklist — Phase 2
 | Step | File | Status |
@@ -29,15 +29,15 @@
 | 4 | `src/ai_reasoner.py` | ✅ DONE |
 | 5 | `src/order_executor.py` | ✅ DONE |
 | 6 | `src/tracker.py` | ✅ DONE |
-| 7 | `src/calibration_engine.py` | ⬅ NEXT |
-| 8 | `src/notifier.py` | pending |
+| 7 | `src/calibration_engine.py` | ✅ DONE |
+| 8 | `src/notifier.py` | ⬅ NEXT |
 | 9 | `src/health_monitor.py` | pending |
 | 10 | `src/daemon.py` | pending |
 | 11 | `src/main.py` | pending |
 | 12 | 6 scripts | pending |
 
 ### Test Suite
-**401/401 tests passing.** Run with: `pytest tests/ -q`
+**440/440 tests passing.** Run with: `pytest tests/ -q`
 
 ### Credentials & Environment
 - `.env` is fully populated (Kalshi demo, Anthropic, Telegram)

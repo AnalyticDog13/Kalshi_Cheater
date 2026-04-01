@@ -104,6 +104,7 @@ class TradingDaemon:
         db_path: str = "./data/trades.db",
         calibration_db_path: str = "./data/calibration.db",
         bias_db_path: str = "./data/station_bias.db",
+        pause_flag_path: str = "./data/daemon.pause",
     ) -> None:
         self._settings = settings
         self._station_mapping = station_mapping
@@ -115,6 +116,9 @@ class TradingDaemon:
         # Daily summary tracking — send once per UTC day
         self._last_summary_date: date | None = None
 
+        # Pause flag path — set by CLI `pause` command; checked each cycle
+        self._pause_flag = Path(pause_flag_path)
+
         self._build_components(db_path, calibration_db_path, bias_db_path)
 
     @classmethod
@@ -124,6 +128,7 @@ class TradingDaemon:
         db_path: str = "./data/trades.db",
         calibration_db_path: str = "./data/calibration.db",
         bias_db_path: str = "./data/station_bias.db",
+        pause_flag_path: str = "./data/daemon.pause",
     ) -> "TradingDaemon":
         """Create daemon from the config directory. Standard production usage."""
         settings, station_mapping, series_tickers = load_settings(config_dir)
@@ -134,6 +139,7 @@ class TradingDaemon:
             db_path=db_path,
             calibration_db_path=calibration_db_path,
             bias_db_path=bias_db_path,
+            pause_flag_path=pause_flag_path,
         )
 
     # ------------------------------------------------------------------
@@ -351,6 +357,13 @@ class TradingDaemon:
         )
 
         # --- 5. Execute + log exploratory --------------------------------
+        paused = self._pause_flag.exists()
+        if paused:
+            logger.info(
+                "Daemon is PAUSED (flag: %s). Scan complete; skipping order execution.",
+                self._pause_flag,
+            )
+
         for result in scan_results:
             if self._stop_event.is_set():
                 logger.info("Stop signal mid-cycle — halting execution loop.")
@@ -359,7 +372,7 @@ class TradingDaemon:
             # Exploratory arm always evaluated (even for rejected results)
             await self._evaluate_exploratory(result, portfolio_balance)
 
-            if result.risk.approved:
+            if result.risk.approved and not paused:
                 await self._execute_trade(result)
 
         # --- 6. Daily summary --------------------------------------------

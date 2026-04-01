@@ -7,20 +7,19 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-01. Update this section at the start of every new session.*
+*Last updated: 2026-04-01 (session 2). Update this section at the start of every new session.*
 
-### Current Status: Phase 2 in progress — steps 1–10 complete, next is step 11: `src/main.py`
+### Current Status: Phase 2 complete — all 11 source files built. Next: 6 scripts (step 12).
 
 ### NEXT STEP (read this first on new session)
-**Build `src/main.py` — Phase 2 step 11.**
-- Click CLI with 5 subcommands: `start`, `stop`, `status`, `pause`, `resume`.
-- `start`: load config, create TradingDaemon, run asyncio.run(daemon.run()). Accepts --config-dir, --db-path, --live flags.
-- `stop`: send SIGTERM to the running daemon PID (read from a PID file written on start).
-- `status`: read tracker DB and health monitor state; print open positions, daily P&L, Brier score, circuit breaker states.
-- `pause`: write a pause flag file that the daemon checks at the top of each cycle (scans but does not execute orders).
-- `resume`: remove the pause flag file.
-- PID file location: `./data/daemon.pid`. Written on daemon start, removed on clean shutdown.
-- No tests required for main.py (thin CLI wrapper).
+**Build the 6 scripts — Phase 2 step 12.**
+Build these in order:
+1. `scripts/validate_stations.py` — verify station_mapping.yaml against live Kalshi series settlement_sources; flag mismatches
+2. `scripts/compute_station_bias.py` — fetch NOAA historical observations + Open-Meteo historical forecasts; compute per-station/month bias; write to station_bias.db
+3. `scripts/collect_historical.py` — scrape Kalshi historical weather markets (settled); store market snapshots for backtesting
+4. `scripts/backtest.py` — run the full pipeline (scanner→edge→risk) on historical snapshots; report hypothetical P&L, Brier, fill rate
+5. `scripts/calibration_report.py` — read trades.db; print Brier score, beat-market rate, dual-arm comparison, per-city breakdown
+6. `scripts/pre_live_checklist.py` — automated readiness check: all 10 items from spec §2.4; print PASS/FAIL per item
 
 ### Build Checklist — Phase 2
 | Step | File | Status |
@@ -35,8 +34,8 @@
 | 8 | `src/notifier.py` | ✅ DONE |
 | 9 | `src/health_monitor.py` | ✅ DONE |
 | 10 | `src/daemon.py` | ✅ DONE |
-| 11 | `src/main.py` | ⬅ NEXT |
-| 12 | 6 scripts | pending |
+| 11 | `src/main.py` | ✅ DONE |
+| 12 | 6 scripts | ⬅ NEXT |
 
 ### Test Suite
 **518/518 tests passing.** Run with: `pytest tests/ -q`
@@ -91,12 +90,11 @@
 | `src/calibration_engine.py` | `BiasDatabase` (per-station/month °F bias, lazy-load); `CalibrationEngine` (isotonic regression, temporal holdout, pickle persistence, auto-refit every 20 obs) |
 | `src/notifier.py` | `NotifierConfig`, `Notifier`; async Telegram Bot API; 5 methods; fail-silent; `log_only` mode |
 | `src/health_monitor.py` | `HealthMonitor`; 3-state circuit breakers (CLOSED→OPEN→HALF-OPEN→CLOSED); 3 failures trip, 5-min cooldown; `record_failure()` returns True on trip |
-| `src/daemon.py` | `TradingDaemon`; full async pipeline; dual-arm eval; SIGINT/SIGTERM graceful shutdown; high-freq windows; fill sync; daily summary; circuit breaker integration |
+| `src/daemon.py` | `TradingDaemon`; full async pipeline; dual-arm eval; SIGINT/SIGTERM graceful shutdown; high-freq windows; fill sync; daily summary; circuit breaker integration; pause flag support |
+| `src/main.py` | Click CLI: `start` (PID file, asyncio.run), `stop` (SIGTERM), `status` (DB metrics), `pause` (flag file), `resume` (remove flag) |
 
-#### Source Code — NOT YET BUILT (1 file)
-| File | What it does |
-|------|-------------|
-| `src/main.py` | CLI: `start`, `stop`, `status`, `pause`, `resume` |
+#### Source Code — COMPLETE (17 files, all built)
+*(No source files remaining — all 17 src/ files complete)*
 
 #### Tests — COMPLETE (12 files, 518 tests total)
 | File | Count | Key coverage |

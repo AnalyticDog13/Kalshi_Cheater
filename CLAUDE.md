@@ -1484,7 +1484,7 @@ conservative = {
     "assumed_slippage": 0.01,
     "fee_multiple_required": 3.0,
     "min_ensemble_members": 30,
-    "min_volume_fp": 50,
+    "min_volume_fp": 5,
     "kelly_fraction": 0.25,
 }
 
@@ -1495,7 +1495,7 @@ exploratory = {
     "assumed_slippage": 0.005,             # half the slippage assumption
     "fee_multiple_required": 1.5,          # lower fee coverage
     "min_ensemble_members": 20,            # accept smaller ensembles
-    "min_volume_fp": 25,                   # accept thinner markets
+    "min_volume_fp": 5,                    # accept thinner markets (exploratory arm matches conservative floor)
     "kelly_fraction": 0.25,               # same sizing (for fair comparison)
 }
 ```

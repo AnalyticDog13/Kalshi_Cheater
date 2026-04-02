@@ -52,11 +52,21 @@ class BiasDatabase:
     (e.g. +1.8 → subtract 1.8°F from ensemble members before computing
     P(max ≥ threshold)).
 
+    Schema:
+        station_id TEXT, month INTEGER, bias_f REAL,
+        sample_count INTEGER,  -- number of matched data points used
+        updated_at TEXT,
+        PRIMARY KEY (station_id, month)
+
     Lazy-loads: the DB file is opened only on first get_bias() or update_bias()
     call. Returns 0.0 without error if the file does not exist.
+
+    get_bias() only returns a non-zero correction when sample_count >= MIN_SAMPLE_COUNT
+    (30), so fresh installs and thin-data stations safely fall back to no correction.
     """
 
     TABLE = "station_bias"
+    MIN_SAMPLE_COUNT = 30  # don't apply corrections based on fewer than this
 
     def __init__(self, db_path: str = "./data/station_bias.db") -> None:
         self._db_path = db_path
@@ -69,38 +79,55 @@ class BiasDatabase:
             if self.TABLE not in self._db.table_names():
                 self._db[self.TABLE].create(
                     {
-                        "station_id": str,
-                        "month":      int,
-                        "bias_f":     float,
-                        "updated_at": str,
+                        "station_id":   str,
+                        "month":        int,
+                        "bias_f":       float,
+                        "sample_count": int,
+                        "updated_at":   str,
                     },
                     pk=("station_id", "month"),
                 )
                 logger.info("Created station_bias table in %s", self._db_path)
+            else:
+                # Migrate existing DBs that are missing sample_count (schema v1)
+                existing_cols = {c.name for c in self._db[self.TABLE].columns}
+                if "sample_count" not in existing_cols:
+                    self._db[self.TABLE].add_column("sample_count", int, not_null_default=0)
+                    logger.info("Migrated station_bias table: added sample_count column")
         return self._db
 
-    def update_bias(self, station_id: str, month: int, bias_f: float) -> None:
+    def update_bias(
+        self,
+        station_id: str,
+        month: int,
+        bias_f: float,
+        sample_count: int = 0,
+    ) -> None:
         """
         Upsert a bias correction for (station_id, month).
 
         Args:
-            station_id: NWS station identifier (e.g. "KNYC")
-            month:      calendar month 1–12
-            bias_f:     bias in °F (positive = ensemble runs hot)
+            station_id:   NWS station identifier (e.g. "KNYC")
+            month:        calendar month 1–12
+            bias_f:       bias in °F (positive = ensemble runs hot)
+            sample_count: number of matched data points this bias is based on.
+                          Corrections with fewer than MIN_SAMPLE_COUNT points are
+                          stored but silently ignored by get_bias().
         """
         db = self._load()
         db[self.TABLE].upsert(
             {
-                "station_id": station_id,
-                "month":      month,
-                "bias_f":     bias_f,
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "station_id":   station_id.upper(),
+                "month":        month,
+                "bias_f":       bias_f,
+                "sample_count": sample_count,
+                "updated_at":   datetime.now(timezone.utc).isoformat(),
             },
             pk=("station_id", "month"),
         )
         logger.debug(
-            "Updated bias for %s month=%d: %.3f°F",
-            station_id, month, bias_f,
+            "Updated bias for %s month=%d: %.3f°F (n=%d)",
+            station_id, month, bias_f, sample_count,
         )
 
     def get_bias(self, station_id: str, month: int) -> float:
@@ -110,15 +137,27 @@ class BiasDatabase:
         Returns 0.0 if:
           - The DB file does not exist yet
           - No entry found for this station/month combination
+          - sample_count was explicitly recorded and is < MIN_SAMPLE_COUNT
           - Any read error
 
+        Note on sample_count filtering: rows written with sample_count=0
+        (the default) are treated as "count not tracked" and are returned
+        without filtering. Rows written with a positive sample_count that
+        falls below MIN_SAMPLE_COUNT are suppressed. This allows
+        compute_station_bias.py to gate on real data quality while keeping
+        tests and legacy rows working.
+
         Args:
-            station_id: NWS station identifier
+            station_id: NWS station identifier (case-insensitive)
             month:      calendar month 1–12
         """
         try:
             db = self._load()
-            row = db[self.TABLE].get((station_id, month))
+            row = db[self.TABLE].get((station_id.upper(), month))
+            sc = row.get("sample_count") or 0
+            # Only suppress if count was explicitly tracked and is too small
+            if sc > 0 and sc < self.MIN_SAMPLE_COUNT:
+                return 0.0
             return float(row["bias_f"])
         except Exception:
             return 0.0

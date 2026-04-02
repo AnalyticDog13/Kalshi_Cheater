@@ -249,7 +249,12 @@ async def compute_bias(config_dir: str, bias_db_path: str, days_back: int) -> No
                 if len(pairs) < MIN_POINTS_FOR_BIAS:
                     continue
                 bias = sum(m - a for m, a in pairs) / len(pairs)
-                bias_db.update_bias(station_id=station_id, month=month, bias_f=round(bias, 3))
+                bias_db.update_bias(
+                    station_id=station_id,
+                    month=month,
+                    bias_f=round(bias, 3),
+                    sample_count=len(pairs),
+                )
                 stored += 1
 
             # Summary row

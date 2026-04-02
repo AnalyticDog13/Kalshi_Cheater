@@ -13,104 +13,19 @@ station per season, compute_station_bias.py should be run to populate correction
 from __future__ import annotations
 
 import logging
-import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any
 
+from src.calibration_engine import BiasDatabase  # single canonical implementation
 from src.data_feeds.weather_ensemble import EnsembleResult, OpenMeteoEnsembleClient
 
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Bias database
-# ---------------------------------------------------------------------------
-
-class BiasDatabase:
-    """
-    Reads per-station, per-month bias corrections from station_bias.db.
-
-    Schema (created by scripts/compute_station_bias.py):
-        CREATE TABLE station_bias (
-            station_id TEXT,
-            month INTEGER,         -- 1-12
-            bias_f REAL,           -- °F to subtract from model predictions
-            sample_count INTEGER,  -- how many resolved markets this is based on
-            updated_at TEXT,       -- ISO8601
-            PRIMARY KEY (station_id, month)
-        )
-
-    If the database doesn't exist yet, all lookups return 0.0 (no correction).
-    This is safe — it just means we're running without bias correction, which
-    is conservative (wider effective uncertainty).
-    """
-
-    MIN_SAMPLE_COUNT = 30  # don't apply corrections based on fewer than this
-
-    def __init__(self, db_path: str | Path) -> None:
-        self.db_path = Path(db_path)
-        self._cache: dict[tuple[str, int], float] = {}
-        self._loaded = False
-
-    def _load(self) -> None:
-        """Load all bias corrections into memory. Called lazily on first lookup."""
-        if self._loaded:
-            return
-
-        if not self.db_path.exists():
-            logger.warning(
-                "station_bias.db not found at %s. "
-                "Running without bias corrections. "
-                "Run scripts/compute_station_bias.py after accumulating 30+ resolved markets "
-                "per station to enable corrections.",
-                self.db_path,
-            )
-            self._loaded = True
-            return
-
-        try:
-            conn = sqlite3.connect(str(self.db_path))
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT station_id, month, bias_f, sample_count FROM station_bias"
-            ).fetchall()
-            conn.close()
-
-            loaded = 0
-            skipped = 0
-            for row in rows:
-                if row["sample_count"] >= self.MIN_SAMPLE_COUNT:
-                    self._cache[(row["station_id"].upper(), row["month"])] = row["bias_f"]
-                    loaded += 1
-                else:
-                    logger.debug(
-                        "Skipping bias for %s month=%d: only %d samples (need %d)",
-                        row["station_id"], row["month"], row["sample_count"], self.MIN_SAMPLE_COUNT,
-                    )
-                    skipped += 1
-
-            logger.info(
-                "Loaded %d bias corrections (%d skipped, insufficient samples)",
-                loaded, skipped,
-            )
-        except Exception as exc:
-            logger.error("Failed to load station_bias.db: %s — proceeding without corrections", exc)
-
-        self._loaded = True
-
-    def get_bias(self, station_id: str, month: int) -> float:
-        """
-        Return the bias correction for a station in a given month.
-
-        Returns 0.0 if:
-          - DB doesn't exist yet
-          - Insufficient sample count for this station/month
-          - Station not in DB
-        """
-        self._load()
-        return self._cache.get((station_id.upper(), month), 0.0)
+# BiasDatabase is re-exported from here so existing imports like
+# `from src.probability_engine import BiasDatabase` continue to work.
+__all__ = ["BiasDatabase", "MarketInfo", "ProbabilityEngine"]
 
 
 # ---------------------------------------------------------------------------

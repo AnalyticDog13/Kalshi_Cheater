@@ -7,12 +7,30 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-01 (session 3 — Phase 2 complete). Update this section at the start of every new session.*
+*Last updated: 2026-04-01 (session 4 — Bug fixes). Update this section at the start of every new session.*
 
-### Current Status: ALL COMPLETE — Phase 2 fully done. All 17 source files + 6 scripts + smoke_test built.
+### Current Status: ALL COMPLETE — Bug fixes in progress (Bug #1 DONE, Bug #2 DONE, Bug #3 PENDING).
 
 ### NEXT STEP (read this first on new session)
-**Phase 2 is complete. See "Phase 3: Getting It Running" section below for what to do next.**
+**Fix Bug #3 — Stale Claude model name in settings.yaml**
+
+**What the bug is:**
+`config/settings.yaml` line 42 has `model: "claude-sonnet-4-20250514"`. This is an old dated model ID.
+The correct current model ID is `claude-sonnet-4-6`. If Anthropic stops routing the old name, all AI
+sanity checks will fail silently (the AIReasoner is fail-open, so trading continues but the sanity check
+feature stops working entirely).
+
+**Steps to fix it:**
+1. Edit `config/settings.yaml` line 42: change `"claude-sonnet-4-20250514"` → `"claude-sonnet-4-6"`
+2. Verify `src/ai_reasoner.py` reads `model` from settings (search for where it loads the model name)
+3. Confirm the model name used in `tests/test_ai_reasoner.py` mocks still matches — update if needed
+4. Run `pytest tests/test_ai_reasoner.py -q` to confirm all 36 tests pass
+5. Run `pytest tests/ -q` to confirm full 518/518
+
+**After fixing Bug #3:** All three bugs are resolved. Proceed to Phase 3 operational steps
+(run smoke_test.py, validate_stations.py, compute_station_bias.py, then start the daemon).
+
+---
 
 ---
 

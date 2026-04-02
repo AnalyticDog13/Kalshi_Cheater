@@ -129,6 +129,84 @@ def market_mid_price(market: Any) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Orderbook normaliser
+# ---------------------------------------------------------------------------
+
+@dataclass
+class OrderbookSnapshot:
+    """
+    Flat, dollar-denominated view of the best bid/ask on each side.
+
+    The Kalshi SDK returns a nested GetMarketOrderbookResponse with:
+        .orderbook.var_true   → list[OrderbookLevel]  (YES bids, best first)
+        .orderbook.var_false  → list[OrderbookLevel]  (NO  bids, best first)
+        OrderbookLevel.price  → int cents (0-99) or float dollars for fractional markets
+        OrderbookLevel.count  → int contracts at that level
+
+    This dataclass normalises that into the flat string fields that
+    order_executor.py and parse_price() / parse_quantity() already expect,
+    exactly matching what a Kalshi market object looks like for the bid/ask
+    fields (so no changes needed in order_executor.py or its tests).
+    """
+    yes_bid_dollars: str   # best YES bid in dollars, e.g. "0.6500"
+    yes_ask_dollars: str   # best YES ask in dollars (= 1 - best NO bid), e.g. "0.6700"
+    yes_bid_size_fp: str   # integer contracts available at best YES bid, e.g. "10"
+    no_bid_dollars:  str   # best NO bid in dollars, e.g. "0.3500"
+    no_bid_size_fp:  str   # integer contracts available at best NO bid, e.g. "8"
+
+
+def _level_price_to_dollars(price) -> float:
+    """
+    Convert an OrderbookLevel.price to a 0–1 dollar float.
+
+    Standard Kalshi markets send integer cents (e.g. 65 → $0.65).
+    Fractional-trading-enabled markets may send a float already in the 0–1
+    range.  The distinguishing rule: if the value is >= 1, treat it as cents.
+    """
+    if price is None:
+        return 0.0
+    val = float(price)
+    return val / 100.0 if val >= 1.0 else val
+
+
+def _normalize_orderbook(raw_response: Any) -> OrderbookSnapshot:
+    """
+    Convert a GetMarketOrderbookResponse (SDK object) to an OrderbookSnapshot.
+
+    Handles None / empty book gracefully: missing sides default to the
+    same sentinel values that order_executor.py already handles (bid=0,
+    ask=1 → empty-book fallback pricing).
+    """
+    ob = getattr(raw_response, "orderbook", None)
+
+    # YES bids are in var_true (alias "true"), sorted best (highest) first.
+    yes_bids = (getattr(ob, "var_true", None) or []) if ob else []
+    # NO bids are in var_false (alias "false"), sorted best (highest) first.
+    no_bids  = (getattr(ob, "var_false", None) or []) if ob else []
+
+    best_yes_bid = yes_bids[0] if yes_bids else None
+    best_no_bid  = no_bids[0]  if no_bids  else None
+
+    yes_bid_price = _level_price_to_dollars(getattr(best_yes_bid, "price", None)) if best_yes_bid else 0.0
+    yes_bid_count = int(getattr(best_yes_bid, "count", 0) or 0)                   if best_yes_bid else 0
+
+    no_bid_price  = _level_price_to_dollars(getattr(best_no_bid,  "price", None)) if best_no_bid  else 0.0
+    no_bid_count  = int(getattr(best_no_bid,  "count", 0) or 0)                   if best_no_bid  else 0
+
+    # YES ask = complement of best NO bid  (YES + NO always sum to $1 on Kalshi).
+    # If there are no NO bids, the YES ask is unknown → default 1.0 (empty ask side).
+    yes_ask_price = (1.0 - no_bid_price) if best_no_bid else 1.0
+
+    return OrderbookSnapshot(
+        yes_bid_dollars=f"{yes_bid_price:.4f}",
+        yes_ask_dollars=f"{yes_ask_price:.4f}",
+        yes_bid_size_fp=str(yes_bid_count),
+        no_bid_dollars =f"{no_bid_price:.4f}",
+        no_bid_size_fp =str(no_bid_count),
+    )
+
+
+# ---------------------------------------------------------------------------
 # KalshiClient wrapper
 # ---------------------------------------------------------------------------
 
@@ -288,15 +366,22 @@ class KalshiClient:
             ticker=ticker,
         )
 
-    async def get_orderbook(self, ticker: str, depth: int = 10) -> Any:
-        """Fetch orderbook for a market."""
-        return await self._call(
+    async def get_orderbook(self, ticker: str, depth: int = 10) -> OrderbookSnapshot:
+        """
+        Fetch orderbook for a market and return a normalised OrderbookSnapshot.
+
+        The Kalshi SDK returns a nested GetMarketOrderbookResponse; this method
+        flattens it into an OrderbookSnapshot with dollar-string fields that
+        parse_price() and order_executor.py already understand.
+        """
+        raw = await self._call(
             "get_market_orderbook",
             cache_key=f"orderbook:{ticker}",
             ttl=self.cache_ttl_orderbook,
             ticker=ticker,
             depth=depth,
         )
+        return _normalize_orderbook(raw)
 
     async def get_series(self, series_ticker: str) -> Any:
         """Fetch series metadata (includes settlement_sources, fee_type, fee_multiplier)."""

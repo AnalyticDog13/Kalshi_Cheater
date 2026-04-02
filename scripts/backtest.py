@@ -67,7 +67,6 @@ from sqlite_utils import Database
 from src.calibration_engine import BiasDatabase
 from src.edge_calculator import EdgeParams, compute_edge
 from src.risk_manager import RiskLimits
-from src.probability_engine import BiasDatabase as PEBiasDB
 from src.market_scanner import parse_direction_from_text
 
 console = Console()

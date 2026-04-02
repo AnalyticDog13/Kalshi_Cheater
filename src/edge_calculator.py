@@ -323,8 +323,8 @@ def compute_edge(
     )
 
     logger.info(
-        "Edge: %s | %s | raw=%.1%% after_taker=%.1%% | %d contracts $%.2f | %s",
-        market_ticker, direction, raw_edge, edge_after_taker,
+        "Edge: %s | %s | raw=%.1f%% after_taker=%.1f%% | %d contracts $%.2f | %s",
+        market_ticker, direction, raw_edge * 100, edge_after_taker * 100,
         recommended_contracts, actual_dollars, recommendation,
     )
 

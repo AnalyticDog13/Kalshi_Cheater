@@ -1,13 +1,14 @@
 """
 Risk Manager.
 
-Enforces the 11-point pre-trade checklist and hard stops for the $1,000 portfolio.
+Enforces the 12-point pre-trade checklist and hard stops for the small-bet live configuration.
 Every trade must pass ALL checks — there are no overrides, no exceptions.
 
 Hard limits (from settings.yaml):
-  max_position_dollars:      $50   (5% of portfolio per market)
-  max_total_exposure_dollars: $250  (25% total open positions)
-  max_daily_loss_dollars:    $30   (3% daily loss → stop trading for the day)
+  max_position_dollars:       $1    (one contract per trade at most prices)
+  max_total_exposure_dollars: $10   (never more than $10 at risk at once)
+  max_daily_loss_dollars:     $2    (stop trading for the day after $2 loss)
+  max_contract_price_dollars: $0.50 (hard cap — never pay more than $0.50 per contract)
 
 The risk manager is STATEFUL — it tracks total current exposure and today's
 realized P&L so checks 2 and 3 are accurate across multiple calls in the
@@ -42,10 +43,11 @@ class RiskLimits:
     All hard limits loaded from settings.yaml risk section.
     These are not guidelines — they are hard stops.
     """
-    max_position_dollars: float = 50.0
-    max_total_exposure_dollars: float = 250.0
-    max_daily_loss_dollars: float = 30.0
-    max_open_orders: int = 10
+    max_position_dollars: float = 1.0
+    max_total_exposure_dollars: float = 10.0
+    max_daily_loss_dollars: float = 2.0
+    max_open_orders: int = 3
+    max_contract_price_dollars: float = 0.50  # hard cap per contract
 
     # From scanner section
     min_volume_fp: float = 50.0
@@ -62,10 +64,11 @@ class RiskLimits:
         s = settings.get("scanner", {})
         e = settings.get("ensemble", {})
         return cls(
-            max_position_dollars=r.get("max_position_dollars", 50.0),
-            max_total_exposure_dollars=r.get("max_total_exposure_dollars", 250.0),
-            max_daily_loss_dollars=r.get("max_daily_loss_dollars", 30.0),
-            max_open_orders=r.get("max_open_orders", 10),
+            max_position_dollars=r.get("max_position_dollars", 1.0),
+            max_total_exposure_dollars=r.get("max_total_exposure_dollars", 10.0),
+            max_daily_loss_dollars=r.get("max_daily_loss_dollars", 2.0),
+            max_open_orders=r.get("max_open_orders", 3),
+            max_contract_price_dollars=r.get("max_contract_price_dollars", 0.50),
             min_volume_fp=s.get("min_volume_fp", 50.0),
             max_spread_dollars=s.get("max_spread_dollars", 0.08),
             min_resolution_hours=s.get("min_resolution_hours", 6.0),
@@ -328,8 +331,20 @@ class RiskManager:
             notes.append("Check 11 OK: market status=open")
 
         # ----------------------------------------------------------
+        # Check 12: Contract price hard cap — never pay > $0.50 per contract
+        # This ensures individual bets stay tiny regardless of Kelly sizing.
+        # ----------------------------------------------------------
+        if edge.entry_price > self.limits.max_contract_price_dollars:
+            failed.append(
+                f"Check 12 FAIL: entry_price ${edge.entry_price:.2f} "
+                f"> max_contract_price ${self.limits.max_contract_price_dollars:.2f}"
+            )
+        else:
+            notes.append(f"Check 12 OK: entry_price=${edge.entry_price:.2f}")
+
+        # ----------------------------------------------------------
         # Also enforce: open orders cap
-        # (Not in the formal 11-point list but a hard operational limit)
+        # (Not in the formal numbered list but a hard operational limit)
         # ----------------------------------------------------------
         if open_orders_count >= self.limits.max_open_orders:
             failed.append(

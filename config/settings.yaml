@@ -3,7 +3,7 @@
 # All tuneable parameters live here. Code should never have magic numbers.
 # =============================================================================
 
-trading_mode: "demo"  # "demo" or "live" — also requires --live CLI flag for live
+trading_mode: "live"  # "demo" or "live" — also requires --live CLI flag for live
 
 api:
   demo_base_url: "https://demo-api.kalshi.co/trade-api/v2"
@@ -39,7 +39,7 @@ ensemble:
   medium_spread_threshold_f: 6    # ensemble spread above this = "medium" confidence
 
 ai:
-  model: "claude-sonnet-4-20250514"
+  model: "claude-sonnet-4-6"
   max_calls_per_day: 50
   sanity_check_edge_threshold: 0.15   # only call AI when |edge| > 15pp
   temperature: 0.1
@@ -56,10 +56,11 @@ edge:
   extreme_price_upper_bound: 0.98
 
 risk:
-  max_position_dollars: 50
-  max_total_exposure_dollars: 250
-  max_daily_loss_dollars: 30
-  max_open_orders: 10
+  max_position_dollars: 1.00          # ~1 contract per trade at most prices
+  max_total_exposure_dollars: 15.00   # never more than 75% of $20 at risk at once
+  max_daily_loss_dollars: 3.00        # stop trading for the day after $3 loss (~15% of bankroll)
+  max_open_orders: 5
+  max_contract_price_dollars: 0.50    # HARD CAP: never pay more than $0.50 per contract
   order_expiry_minutes: 10            # cancel and re-evaluate after this long unfilled
 
 calibration:

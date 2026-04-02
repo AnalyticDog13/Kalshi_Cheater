@@ -29,6 +29,7 @@ DEFAULT_LIMITS = RiskLimits(
     max_total_exposure_dollars=250.0,
     max_daily_loss_dollars=30.0,
     max_open_orders=10,
+    max_contract_price_dollars=0.50,
     min_volume_fp=50.0,
     max_spread_dollars=0.08,
     min_resolution_hours=6.0,
@@ -42,9 +43,9 @@ def make_edge(
     recommendation: str = "TRADE",
     direction: str = "BUY_YES",
     raw_edge: float = 0.10,
-    entry_price: float = 0.60,
+    entry_price: float = 0.40,
     recommended_contracts: int = 10,
-    recommended_dollars: float = 6.0,
+    recommended_dollars: float = 4.0,
     edge_after_taker: float = 0.08,
     skip_reason: str | None = None,
 ) -> EdgeAssessment:
@@ -130,6 +131,7 @@ class TestRiskLimitsFromSettings:
                 "max_total_exposure_dollars": 300.0,
                 "max_daily_loss_dollars": 40.0,
                 "max_open_orders": 5,
+                "max_contract_price_dollars": 0.30,
             }
         }
         limits = RiskLimits.from_settings(settings)
@@ -137,6 +139,7 @@ class TestRiskLimitsFromSettings:
         assert limits.max_total_exposure_dollars == 300.0
         assert limits.max_daily_loss_dollars == 40.0
         assert limits.max_open_orders == 5
+        assert limits.max_contract_price_dollars == 0.30
 
     def test_loads_scanner_section(self):
         settings = {
@@ -158,8 +161,9 @@ class TestRiskLimitsFromSettings:
 
     def test_defaults_when_empty(self):
         limits = RiskLimits.from_settings({})
-        assert limits.max_position_dollars == 50.0
-        assert limits.max_total_exposure_dollars == 250.0
+        assert limits.max_position_dollars == 1.0
+        assert limits.max_total_exposure_dollars == 10.0
+        assert limits.max_contract_price_dollars == 0.50
         assert limits.min_ensemble_members == 30
 
 
@@ -524,6 +528,32 @@ class TestCheck11MarketStatus:
         rm = make_rm()
         outcome = approved_call(rm, market_status="unopened")
         assert any("Check 11" in f for f in outcome.failed_checks)
+
+
+# ===========================================================================
+# Check 12: Contract price hard cap
+# ===========================================================================
+
+class TestCheck12ContractPriceCap:
+
+    def test_entry_price_above_cap_fails(self):
+        rm = make_rm()
+        expensive = make_edge(entry_price=0.60)  # $0.60 > $0.50 cap
+        outcome = approved_call(rm, edge=expensive)
+        assert not outcome.approved
+        assert any("Check 12" in f for f in outcome.failed_checks)
+
+    def test_entry_price_at_cap_passes(self):
+        rm = make_rm()
+        at_cap = make_edge(entry_price=0.50)
+        outcome = approved_call(rm, edge=at_cap)
+        assert not any("Check 12" in f for f in outcome.failed_checks)
+
+    def test_entry_price_below_cap_passes(self):
+        rm = make_rm()
+        cheap = make_edge(entry_price=0.20)
+        outcome = approved_call(rm, edge=cheap)
+        assert not any("Check 12" in f for f in outcome.failed_checks)
 
 
 # ===========================================================================

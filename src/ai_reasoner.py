@@ -49,7 +49,7 @@ class AIParams:
     Loaded from settings.yaml ai section.
     Model ID must come from settings — never hardcoded in source.
     """
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     max_calls_per_day: int = 50
     temperature: float = 0.1
     max_tokens: int = 500
@@ -59,7 +59,7 @@ class AIParams:
     def from_settings(cls, settings: dict) -> "AIParams":
         ai = settings.get("ai", {})
         return cls(
-            model=ai.get("model", "claude-sonnet-4-20250514"),
+            model=ai.get("model", "claude-sonnet-4-6"),
             max_calls_per_day=ai.get("max_calls_per_day", 50),
             temperature=ai.get("temperature", 0.1),
             max_tokens=ai.get("max_tokens", 500),

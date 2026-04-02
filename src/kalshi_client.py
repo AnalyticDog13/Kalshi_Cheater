@@ -386,10 +386,10 @@ class KalshiClient:
     async def get_series(self, series_ticker: str) -> Any:
         """Fetch series metadata (includes settlement_sources, fee_type, fee_multiplier)."""
         return await self._call(
-            "get_series",
+            "get_series_by_ticker",
             cache_key=f"series:{series_ticker}",
             ttl=600.0,  # series metadata rarely changes; cache 10 min
-            series_ticker=series_ticker,
+            ticker=series_ticker,
         )
 
     async def list_markets(
@@ -463,7 +463,7 @@ class KalshiClient:
             cache_key="positions",
             ttl=self.cache_ttl_portfolio,
         )
-        return getattr(response, "market_positions", []) or []
+        return getattr(response, "positions", []) or []
 
     async def get_orders(self, status: str = "open") -> list[Any]:
         """Fetch orders filtered by status."""
@@ -544,6 +544,7 @@ class KalshiClient:
             order_id=order_id,
         )
         self._cache.invalidate("orders:open")
+        self._cache.invalidate("positions")
         return result
 
     # ------------------------------------------------------------------

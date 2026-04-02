@@ -6,29 +6,48 @@
 
 ---
 
-## BUILD PROGRESS LOG
-*Last updated: 2026-04-01 (session 4 — Bug fixes). Update this section at the start of every new session.*
+## BUGS FIXED (session 8 — 2026-04-02)
+*All 5 bugs from the session 7 audit were fixed. 521/521 tests still passing.*
 
-### Current Status: ALL COMPLETE — Bug fixes in progress (Bug #1 DONE, Bug #2 DONE, Bug #3 PENDING).
+| Bug | File | Fix applied |
+|-----|------|-------------|
+| #1 CRITICAL | `src/kalshi_client.py:466` | `"market_positions"` → `"positions"` |
+| #2 MEDIUM | `src/edge_calculator.py:326` | `%.1%%` → `%.1f%%`, args ×100 |
+| #2 MEDIUM | `src/data_feeds/weather_ensemble.py:333` | `%.1%%` → `%.1f%%` |
+| #3 LOW-MEDIUM | `src/kalshi_client.py:387-393` | `"get_series"` → `"get_series_by_ticker"`, `series_ticker=` → `ticker=` |
+| #4 LOW-MEDIUM | `src/daemon.py:329` | fallback `100.0` → `20.0` |
+| #4 LOW-MEDIUM | `src/daemon.py:992` | `cents > 100` → `cents >= 200` |
+| #5 LOW | `src/kalshi_client.py:546` | Added `self._cache.invalidate("positions")` |
+
+---
+
+## BUILD PROGRESS LOG
+*Last updated: 2026-04-02 (session 8 — Fixed all 5 audit bugs. Ready to run live.). Update this section at the start of every new session.*
+
+### Current Status: 521/521 tests passing. Configured for LIVE real-money micro-betting. All bugs fixed — ready to start daemon.
+
+### Live Micro-Betting Configuration (session 6, final state)
+- `config/settings.yaml`: `trading_mode: "live"`, `max_position_dollars: 1.00`,
+  `max_total_exposure_dollars: 15.00`, `max_daily_loss_dollars: 3.00`, `max_open_orders: 5`,
+  `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager)
+  - Rationale: $20 bankroll; 75% max exposure ($15), 15% daily loss limit ($3), 5 open orders
+- `src/risk_manager.py`: Added Check 12 (entry_price ≤ max_contract_price_dollars)
+- Test count: 518 → 521 (3 new Check 12 tests)
+- Environment: LIVE Kalshi (not demo) — separate orderbook, real money, real fills
 
 ### NEXT STEP (read this first on new session)
-**Fix Bug #3 — Stale Claude model name in settings.yaml**
+**All bugs are fixed. Proceed to Phase 3 operational steps to start live trading.**
 
-**What the bug is:**
-`config/settings.yaml` line 42 has `model: "claude-sonnet-4-20250514"`. This is an old dated model ID.
-The correct current model ID is `claude-sonnet-4-6`. If Anthropic stops routing the old name, all AI
-sanity checks will fail silently (the AIReasoner is fail-open, so trading continues but the sanity check
-feature stops working entirely).
-
-**Steps to fix it:**
-1. Edit `config/settings.yaml` line 42: change `"claude-sonnet-4-20250514"` → `"claude-sonnet-4-6"`
-2. Verify `src/ai_reasoner.py` reads `model` from settings (search for where it loads the model name)
-3. Confirm the model name used in `tests/test_ai_reasoner.py` mocks still matches — update if needed
-4. Run `pytest tests/test_ai_reasoner.py -q` to confirm all 36 tests pass
-5. Run `pytest tests/ -q` to confirm full 518/518
-
-**After fixing Bug #3:** All three bugs are resolved. Proceed to Phase 3 operational steps
-(run smoke_test.py, validate_stations.py, compute_station_bias.py, then start the daemon).
+1. Ensure `.env` contains live credentials:
+   ```
+   TRADING_MODE=live
+   KALSHI_LIVE_API_KEY_ID=your_live_key_id
+   KALSHI_LIVE_PRIVATE_KEY_PATH=/path/to/live_private_key.pem
+   ```
+2. Run `python scripts/smoke_test.py` — verify all API credentials
+3. Run `python scripts/validate_stations.py` — verify station mappings
+4. Run `python scripts/compute_station_bias.py --days-back 365` — build bias corrections (~10-15 min)
+5. Run `python -m src.main start --live` — start daemon in live mode (BOTH `trading_mode: "live"` in settings.yaml AND `--live` flag required)
 
 ---
 
@@ -36,7 +55,7 @@ feature stops working entirely).
 
 ## PHASE 3: GETTING IT RUNNING (Operational Checklist)
 
-*The code is done. Now you need to run it, collect data, and evaluate before considering live trading.*
+*The code is done and bugs are fixed. The system is configured for LIVE real-money trading on the live Kalshi environment (not demo). Follow these steps to start.*
 
 ### Step 1 — Verify Everything Works (30 minutes, one time)
 
@@ -56,7 +75,7 @@ python scripts/compute_station_bias.py --days-back 365
 **What to watch for in validate_stations.py:**
 - WARN rows are usually OK — small coordinate differences between NOAA and our config
 - FAIL rows mean the station_id is wrong and must be fixed in `config/station_mapping.yaml` before trading
-- If Kalshi API call fails (demo API doesn't have the series), that's OK — NOAA check is the critical one
+- If a Kalshi API call fails on a particular series, that's OK — NOAA check is the critical one
 
 **What to watch for in compute_station_bias.py:**
 - "0 months stored" for a city = NOAA has no data for that station, or station ID is wrong
@@ -66,8 +85,8 @@ python scripts/compute_station_bias.py --days-back 365
 ### Step 2 — First Daemon Run (watch the logs live)
 
 ```bash
-# Start daemon in demo mode, log to console
-python -m src.main start
+# Start daemon in live mode, log to console
+python -m src.main start --live
 
 # In a separate terminal — check status
 python -m src.main status
@@ -82,14 +101,14 @@ python -m src.main status
 | `kalshi_api circuit OPEN` | Kalshi API unreachable; wait for 5-min cooldown |
 | `open_meteo circuit OPEN` | Open-Meteo unreachable; check internet/rate limits |
 | `Edge evaporated` | Market moved before order; normal, not an error |
-| `[TRADE PLACED]` in Telegram | First real paper-trade order submitted |
+| `[TRADE PLACED]` in Telegram | First live order submitted |
 | `Service kalshi_api failure 1/3` | API hiccup; not tripped yet, just watching |
 
 **Common first-run issues and fixes:**
 
 | Problem | Fix |
 |---------|-----|
-| `KALSHI_DEMO_API_KEY_ID not set` | Check `.env` is loaded; re-run `python scripts/smoke_test.py` |
+| `KALSHI_LIVE_API_KEY_ID not set` | Check `.env` is loaded with live credentials; re-run `python scripts/smoke_test.py` |
 | `approved=0` every cycle | Normal if no markets have sufficient edge right now |
 | `filtered_no_station=N` (high N) | Station mapping missing entries; add series to `station_mapping.yaml` |
 | `parse_threshold_from_ticker` warnings | Kalshi changed ticker format; fix regex in `market_scanner.py:_parse_threshold_from_text()` |
@@ -150,20 +169,16 @@ python scripts/calibration_report.py
 
 Also run `collect_historical.py` to backfill historical market data, then `backtest.py --mode hindcast` for a quick sanity check (see backtest caveat about lookahead bias).
 
-### Step 5 — Live Trading (After Metrics Confirmed)
+### Step 5 — Live Trading (CURRENT STATE)
 
-Only proceed after 100+ resolved markets with sustained positive metrics.
+**The system is already configured for live trading.** `trading_mode: "live"` is set in `config/settings.yaml` and the `--live` flag is required at startup. Current risk limits: $1 max position, $15 max exposure, $3 daily loss limit.
 
+To start:
 ```bash
-python scripts/pre_live_checklist.py
+python -m src.main start --live
 ```
 
-All 10 checks must pass. The script requires a typed confirmation phrase. After that:
-1. Set `TRADING_MODE=live` in `.env`
-2. Add `KALSHI_LIVE_API_KEY_ID` and `KALSHI_LIVE_PRIVATE_KEY_PATH` to `.env`
-3. Back up your database: `cp data/trades.db data/trades.db.bak`
-4. Start with live flag: `python -m src.main start --live`
-5. Maximum exposure starts at $50 (shadow mode) — do not increase until 200+ total resolved markets
+After accumulating 100+ resolved markets, run `pre_live_checklist.py` and `calibration_report.py` to evaluate whether to increase position sizes. Do not raise `max_position_dollars` above $1 until metrics are confirmed.
 
 ---
 

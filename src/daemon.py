@@ -324,9 +324,9 @@ class TradingDaemon:
             portfolio_balance = _parse_balance(balance_obj)
         except Exception as exc:
             logger.warning(
-                "Could not fetch balance (%s) — using fallback $100.", exc
+                "Could not fetch balance (%s) — using fallback $20.", exc
             )
-            portfolio_balance = 100.0
+            portfolio_balance = 20.0
 
         # --- 4. Market scan ----------------------------------------------
         if self.health_monitor.is_open("open_meteo"):
@@ -989,7 +989,7 @@ def _parse_balance(balance_obj: Any) -> float:
             try:
                 cents = float(val)
                 # SDK returns cents (integer) — convert to dollars
-                return cents / 100.0 if cents > 100 else cents
+                return cents / 100.0 if cents >= 200 else cents
             except (TypeError, ValueError):
                 pass
     return 100.0

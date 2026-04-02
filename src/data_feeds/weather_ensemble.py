@@ -330,7 +330,7 @@ class OpenMeteoEnsembleClient(DataFeed):
         )
 
         logger.info(
-            "Probability computed: %s | P=%.1%% (%d/%d members) | "
+            "Probability computed: %s | P=%.1f%% (%d/%d members) | "
             "mean=%.1fF spread=%.1fF conf=%s | bias=%+.1fF",
             market_ticker or f"lat={station_lat}",
             probability * 100, exceeding, total,

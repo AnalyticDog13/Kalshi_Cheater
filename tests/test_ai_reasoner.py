@@ -86,7 +86,7 @@ def _set_raw_response(mock_create: MagicMock, text: str) -> None:
 class TestAIParams:
     def test_defaults(self):
         p = AIParams()
-        assert p.model == "claude-sonnet-4-20250514"
+        assert p.model == "claude-sonnet-4-6"
         assert p.max_calls_per_day == 50
         assert p.temperature == 0.1
         assert p.max_tokens == 500
@@ -113,14 +113,14 @@ class TestAIParams:
         """Empty settings uses all defaults."""
         p = AIParams.from_settings({})
         assert p.max_calls_per_day == 50
-        assert p.model == "claude-sonnet-4-20250514"
+        assert p.model == "claude-sonnet-4-6"
 
     def test_from_settings_partial(self):
         """Only some keys provided — rest get defaults."""
         settings = {"ai": {"max_calls_per_day": 10}}
         p = AIParams.from_settings(settings)
         assert p.max_calls_per_day == 10
-        assert p.model == "claude-sonnet-4-20250514"  # default
+        assert p.model == "claude-sonnet-4-6"  # default
 
 
 # ---------------------------------------------------------------------------

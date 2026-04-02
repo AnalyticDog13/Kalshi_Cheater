@@ -1165,8 +1165,8 @@ def compute_edge(
 | `min_edge` | 0.04 | 4pp minimum (at high confidence) |
 | `min_ensemble_members` | 30 | Don't trade if too few members contributed |
 | `min_confidence` | "medium" | Skip "low" confidence (wide ensemble spread) |
-| `min_volume_fp` | 50 | Minimum contracts traded |
-| `max_spread_dollars` | 0.08 | Max $0.08 bid-ask spread |
+| `min_volume_fp` | 5 | Minimum contracts traded (lowered from 50 — Kalshi weather markets are thin) |
+| `max_spread_dollars` | 0.15 | Max $0.15 bid-ask spread (raised from 0.08 — weather markets have wider spreads) |
 | `min_hours_to_resolution` | 6 | Don't enter markets resolving in <6 hours |
 | `max_days_to_resolution` | 7 | Focus on 1-7 day forecasts (highest accuracy) |
 | `kalshi_position_limit` | $25,000 | Kalshi's own per-market limit (won't hit at $1k portfolio) |
@@ -1312,8 +1312,8 @@ api:
 
 scanner:
   poll_interval_minutes: 5
-  min_volume_fp: 50
-  max_spread_dollars: 0.08
+  min_volume_fp: 5                # lowered from 50 — Kalshi weather markets are thin
+  max_spread_dollars: 0.15        # raised from 0.08 — weather markets have wider spreads
   min_resolution_hours: 6
   max_resolution_days: 7
 
@@ -1369,15 +1369,15 @@ scheduling:
 ### 2.2 Environment Variables (`.env`)
 
 ```bash
+# DEMO CREDENTIALS (kept for reference, unused during live trading)
+KALSHI_DEMO_API_KEY_ID=your_demo_key_id
+KALSHI_DEMO_PRIVATE_KEY_PATH=/path/to/demo_private_key.pem
+
 # REQUIRED — THIS DEPLOYMENT IS LIVE (real money, $30 bankroll)
 TRADING_MODE=live
 KALSHI_LIVE_API_KEY_ID=your_live_key_id
 KALSHI_LIVE_PRIVATE_KEY_PATH=/path/to/live_private_key.pem
 ANTHROPIC_API_KEY=your_anthropic_key
-
-# DEMO CREDENTIALS (kept for reference, unused during live trading)
-KALSHI_DEMO_API_KEY_ID=your_demo_key_id
-KALSHI_DEMO_PRIVATE_KEY_PATH=/path/to/demo_private_key.pem
 
 # NOTIFICATIONS
 TELEGRAM_BOT_TOKEN=your_bot_token

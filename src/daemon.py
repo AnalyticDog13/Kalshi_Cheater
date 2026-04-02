@@ -327,9 +327,9 @@ class TradingDaemon:
             portfolio_balance = _parse_balance(balance_obj)
         except Exception as exc:
             logger.warning(
-                "Could not fetch balance (%s) — using fallback $20.", exc
+                "Could not fetch balance (%s) — using fallback $30.", exc
             )
-            portfolio_balance = 20.0
+            portfolio_balance = 30.0
 
         # --- 4. Market scan ----------------------------------------------
         if self.health_monitor.is_open("open_meteo"):

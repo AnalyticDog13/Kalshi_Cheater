@@ -15,25 +15,27 @@
 | #2 MEDIUM | `src/edge_calculator.py:326` | `%.1%%` → `%.1f%%`, args ×100 |
 | #2 MEDIUM | `src/data_feeds/weather_ensemble.py:333` | `%.1%%` → `%.1f%%` |
 | #3 LOW-MEDIUM | `src/kalshi_client.py:387-393` | `"get_series"` → `"get_series_by_ticker"`, `series_ticker=` → `ticker=` |
-| #4 LOW-MEDIUM | `src/daemon.py:329` | fallback `100.0` → `20.0` |
+| #4 LOW-MEDIUM | `src/daemon.py:329` | fallback `100.0` → `30.0` (updated again for $30 bankroll) |
 | #4 LOW-MEDIUM | `src/daemon.py:992` | `cents > 100` → `cents >= 200` |
 | #5 LOW | `src/kalshi_client.py:546` | Added `self._cache.invalidate("positions")` |
 
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-02 (session 8 — Fixed all 5 audit bugs. Ready to run live.). Update this section at the start of every new session.*
+*Last updated: 2026-04-02 (session 8 — Fixed all 5 audit bugs, added report system, updated to $30 bankroll. Ready to run live.). Update this section at the start of every new session.*
 
-### Current Status: 521/521 tests passing. Configured for LIVE real-money micro-betting. All bugs fixed — ready to start daemon.
+### Current Status: 521/521 tests passing. LIVE real-money trading on live Kalshi. All bugs fixed. Report system active.
 
-### Live Micro-Betting Configuration (session 6, final state)
+### Live Configuration (current)
+- **Bankroll:** $30 (live Kalshi account)
+- **Environment:** LIVE Kalshi API (`api.elections.kalshi.com`) — real money, real fills, NOT demo
 - `config/settings.yaml`: `trading_mode: "live"`, `max_position_dollars: 1.00`,
   `max_total_exposure_dollars: 15.00`, `max_daily_loss_dollars: 3.00`, `max_open_orders: 5`,
   `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager)
-  - Rationale: $20 bankroll; 75% max exposure ($15), 15% daily loss limit ($3), 5 open orders
-- `src/risk_manager.py`: Added Check 12 (entry_price ≤ max_contract_price_dollars)
-- Test count: 518 → 521 (3 new Check 12 tests)
-- Environment: LIVE Kalshi (not demo) — separate orderbook, real money, real fills
+  - Rationale: $30 bankroll; 50% max exposure ($15), 10% daily loss limit ($3), 5 open orders
+- `src/risk_manager.py`: 12-point pre-trade checklist including Check 12 (entry_price ≤ $0.50)
+- `src/daemon.py`: balance fallback set to $30.0
+- Test count: 521/521
 
 ### NEXT STEP (read this first on new session)
 **All bugs are fixed. Proceed to Phase 3 operational steps to start live trading.**
@@ -48,6 +50,65 @@
 3. Run `python scripts/validate_stations.py` — verify station mappings
 4. Run `python scripts/compute_station_bias.py --days-back 365` — build bias corrections (~10-15 min)
 5. Run `python -m src.main start --live` — start daemon in live mode (BOTH `trading_mode: "live"` in settings.yaml AND `--live` flag required)
+
+---
+
+## REPORT SYSTEM
+
+**Zero AI in report generation.** All numbers come directly from `data/trades.db`. AI is only involved when you manually paste a report into Claude/Opus.
+
+### Output Structure
+```
+reports/
+├── daily/          YYYY-MM-DD.md        — generated every day at UTC midnight
+├── weekly/         YYYY-WXX.md          — generated every Monday at UTC midnight (covers prior Mon–Sun)
+└── feed_to_ai/     YYYY-WXX_prompt.md   — generated with each weekly report; paste into Opus manually
+```
+
+### What Each Report Contains
+
+**Daily (`reports/daily/YYYY-MM-DD.md`):**
+- Status: `NORMAL` or `ALERT` with specific reason (e.g. "Daily P&L -$2.50 approaching loss limit", "Brier score 0.26 above threshold", "No fills in 3 days")
+- Activity: orders placed / filled / expired / resolved; exploratory arm paper trades
+- P&L: today's resolved P&L, all-time P&L, fees, open exposure
+- Tables: resolved trades today, open positions
+- Performance snapshot: rolling-50 Brier score, rolling-50 beat-market rate
+
+**Weekly (`reports/weekly/YYYY-WXX.md`):**
+- Full summary table (this week + all-time)
+- Day-by-day P&L breakdown
+- Ensemble & prediction performance (Brier, beat-market rate with rolling windows)
+- Fill quality (fill rate, maker rate, average slippage)
+- Per-city performance table (resolved count, win rate, P&L, Brier per city)
+- Dual-arm comparison (conservative real trades vs exploratory paper trades)
+- Current configuration snapshot (risk limits, edge thresholds, ensemble settings)
+
+**Feed-to-AI (`reports/feed_to_ai/YYYY-WXX_prompt.md`):**
+- Last 4 weekly reports concatenated
+- Current `settings.yaml` relevant sections
+- 8 pre-written analysis questions for Opus (P&L trend, calibration, beat-market, guardrail sizing, fill quality, per-city, parameter recommendations, red flags)
+- **Never sent anywhere automatically — open the file and paste it into Claude/Opus yourself**
+
+### How Reports Are Triggered
+- The daemon generates reports automatically at UTC midnight (first cycle after midnight)
+- Reports are written via `asyncio.to_thread` so they never block the trading loop
+- A report write failure logs a warning and trading continues unaffected
+
+### Manual Generation
+```bash
+python scripts/generate_reports.py --daily              # yesterday
+python scripts/generate_reports.py --daily 2026-04-02   # specific date
+python scripts/generate_reports.py --weekly             # last completed week
+python scripts/generate_reports.py --weekly 2026-04-06  # specific week-end date
+python scripts/generate_reports.py --feed-to-ai         # rebuild prompt package from existing weeklies
+```
+
+### How to Use the Feed-to-AI Package
+1. Open `reports/feed_to_ai/YYYY-WXX_prompt.md`
+2. Copy the entire contents
+3. Paste into Claude Opus (or Sonnet) and ask it to answer the questions at the bottom
+4. Use Opus's recommendations to decide whether to adjust thresholds, investigate cities, or change parameters
+5. Any parameter changes must be made manually in `config/settings.yaml` — the AI never touches the system
 
 ---
 
@@ -171,7 +232,15 @@ Also run `collect_historical.py` to backfill historical market data, then `backt
 
 ### Step 5 — Live Trading (CURRENT STATE)
 
-**The system is already configured for live trading.** `trading_mode: "live"` is set in `config/settings.yaml` and the `--live` flag is required at startup. Current risk limits: $1 max position, $15 max exposure, $3 daily loss limit.
+**The system is already configured for live trading.** `trading_mode: "live"` is set in `config/settings.yaml` and the `--live` flag is required at startup.
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Bankroll | $30 | Live Kalshi account |
+| Max position | $1.00 | Per market |
+| Max exposure | $15.00 | 50% of bankroll |
+| Daily loss limit | $3.00 | 10% of bankroll — halts trading for the day |
+| Max contract price | $0.50 | Never pay more than this per contract |
 
 To start:
 ```bash
@@ -215,12 +284,12 @@ These are runtime issues that only reveal themselves when talking to live APIs. 
 | 12 | 6 scripts | ✅ DONE |
 
 ### Test Suite
-**518/518 tests passing.** Run with: `pytest tests/ -q`
+**521/521 tests passing.** Run with: `pytest tests/ -q`
 
 ### Credentials & Environment
-- `.env` is fully populated (Kalshi demo, Anthropic, Telegram)
-- Kalshi demo API: authenticated, $500 demo balance confirmed
-- Private key: `C:\Users\willi\demo_kalshi_key.pem`
+- `.env` is fully populated: `TRADING_MODE=live`, live Kalshi credentials, Anthropic, Telegram
+- **Live Kalshi API:** real-money account, $30 starting balance
+- Demo credentials also present in `.env` (unused during live trading, kept for reference)
 - Python 3.12 on Windows 11
 - All dependencies installed via `pip install -r requirements.txt`
 - `cryptography` package added to requirements.txt (missing from spec, required by kalshi-python)
@@ -1231,7 +1300,7 @@ class TradeRecord:
 ### 2.1 `settings.yaml`
 
 ```yaml
-trading_mode: "demo"  # "demo" or "live"
+trading_mode: "live"  # "demo" or "live" — THIS DEPLOYMENT USES "live"
 
 api:
   demo_base_url: "https://demo-api.kalshi.co/trade-api/v2"
@@ -1300,15 +1369,15 @@ scheduling:
 ### 2.2 Environment Variables (`.env`)
 
 ```bash
-# REQUIRED
-TRADING_MODE=demo
-KALSHI_DEMO_API_KEY_ID=your_demo_key_id
-KALSHI_DEMO_PRIVATE_KEY_PATH=/path/to/demo_private_key.pem
-ANTHROPIC_API_KEY=your_anthropic_key
-
-# REQUIRED FOR LIVE (when transitioning)
+# REQUIRED — THIS DEPLOYMENT IS LIVE (real money, $30 bankroll)
+TRADING_MODE=live
 KALSHI_LIVE_API_KEY_ID=your_live_key_id
 KALSHI_LIVE_PRIVATE_KEY_PATH=/path/to/live_private_key.pem
+ANTHROPIC_API_KEY=your_anthropic_key
+
+# DEMO CREDENTIALS (kept for reference, unused during live trading)
+KALSHI_DEMO_API_KEY_ID=your_demo_key_id
+KALSHI_DEMO_PRIVATE_KEY_PATH=/path/to/demo_private_key.pem
 
 # NOTIFICATIONS
 TELEGRAM_BOT_TOKEN=your_bot_token

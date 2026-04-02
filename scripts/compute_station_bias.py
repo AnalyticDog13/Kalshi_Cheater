@@ -51,27 +51,39 @@ from src.calibration_engine import BiasDatabase
 console = Console()
 
 HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
-NOAA_BASE = "https://api.weather.gov"
-NOAA_HEADERS = {"User-Agent": "KalshiWeatherTrader/1.0 (bias-correction-script)"}
+ERA5_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 MIN_POINTS_FOR_BIAS = 10  # minimum observations per station/month
 REQUEST_TIMEOUT = 30.0
 
 
 # ---------------------------------------------------------------------------
-# NOAA batch fetch — one call per month for efficiency
+# ERA5 archive fetch — replaces NOAA observations as ground truth source.
+#
+# Why ERA5 instead of NOAA api.weather.gov observations?
+# The NOAA observations API (api.weather.gov/stations/{id}/observations) only
+# retains ~30-60 days of data online. Months older than that return 0 features.
+# ERA5 is ECMWF's reanalysis dataset: free, no API key, global coverage back to
+# 1940, and accurate to ~0.5°F vs station observations at major airports.
+# The bias (GFS_hindcast - ERA5_actual) is the correct quantity to correct for
+# because it measures how much the live ensemble over/underpredicts reality at
+# each station's exact lat/lon.
 # ---------------------------------------------------------------------------
 
-async def fetch_noaa_monthly_maxes(
+async def fetch_era5_monthly_maxes(
     client: httpx.AsyncClient,
-    station_id: str,
+    lat: float,
+    lon: float,
     year: int,
     month: int,
 ) -> dict[date, float]:
     """
-    Fetch all daily max temperatures for a station/month from NOAA.
+    Fetch daily max temperatures from the Open-Meteo ERA5 archive API.
 
-    Returns dict of {date: max_temp_f}. Missing dates are absent from the dict.
-    Temperatures are converted from Celsius to Fahrenheit.
+    ERA5 is ECMWF's reanalysis — it fuses model output with actual observations
+    to produce the best estimate of what really happened. Returns one value per
+    calendar day, already in Fahrenheit.
+
+    Returns dict of {date: max_temp_f}. Missing dates are absent.
     """
     month_start = date(year, month, 1)
     if month == 12:
@@ -79,46 +91,44 @@ async def fetch_noaa_monthly_maxes(
     else:
         month_end = date(year, month + 1, 1) - timedelta(days=1)
 
-    url = f"{NOAA_BASE}/stations/{station_id}/observations"
+    # ERA5 archive has ~5-day lag; clamp end to 5 days ago
+    latest_available = date.today() - timedelta(days=5)
+    if month_end > latest_available:
+        month_end = latest_available
+    if month_start > latest_available:
+        return {}
+
     params = {
-        "start": f"{month_start.isoformat()}T00:00:00Z",
-        "end":   f"{month_end.isoformat()}T23:59:59Z",
+        "latitude":         lat,
+        "longitude":        lon,
+        "start_date":       month_start.isoformat(),
+        "end_date":         month_end.isoformat(),
+        "daily":            "temperature_2m_max",
+        "temperature_unit": "fahrenheit",
+        "timezone":         "UTC",
     }
 
     try:
-        resp = await client.get(url, params=params, headers=NOAA_HEADERS, timeout=REQUEST_TIMEOUT)
+        resp = await client.get(ERA5_ARCHIVE_URL, params=params, timeout=REQUEST_TIMEOUT)
         resp.raise_for_status()
-        features = resp.json().get("features", [])
+        payload = resp.json()
     except Exception as exc:
-        console.print(f"  [yellow]NOAA {station_id} {year}-{month:02d}: {exc}[/yellow]")
+        console.print(f"  [yellow]ERA5 ({lat},{lon}) {year}-{month:02d}: {exc}[/yellow]")
         return {}
 
-    # Build daily max temps: accumulate hourly observations per day
-    daily_readings: dict[date, list[float]] = defaultdict(list)
-    for obs in features:
-        props = obs.get("properties", {})
-        ts_raw = props.get("timestamp")
-        if not ts_raw:
+    dates_raw = payload.get("daily", {}).get("time", [])
+    temps_raw = payload.get("daily", {}).get("temperature_2m_max", [])
+
+    result: dict[date, float] = {}
+    for d_str, t in zip(dates_raw, temps_raw):
+        if t is None:
             continue
         try:
-            obs_date = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).date()
-        except ValueError:
+            result[date.fromisoformat(d_str)] = float(t)
+        except (ValueError, TypeError):
             continue
 
-        # maxTemperatureLast24Hours is the authoritative field
-        max_24h = props.get("maxTemperatureLast24Hours", {})
-        temp_c = max_24h.get("value") if isinstance(max_24h, dict) else None
-
-        # Fall back to instantaneous temperature
-        if temp_c is None:
-            temp_obj = props.get("temperature", {})
-            temp_c = temp_obj.get("value") if isinstance(temp_obj, dict) else None
-
-        if temp_c is not None:
-            temp_f = temp_c * 9.0 / 5.0 + 32.0
-            daily_readings[obs_date].append(temp_f)
-
-    return {d: max(temps) for d, temps in daily_readings.items() if temps}
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -228,18 +238,18 @@ async def compute_bias(config_dir: str, bias_db_path: str, days_back: int) -> No
             monthly_pairs: dict[int, list[tuple[float, float]]] = defaultdict(list)
 
             for year, month in ym_pairs:
-                noaa_data  = await fetch_noaa_monthly_maxes(client, station_id, year, month)
+                era5_data  = await fetch_era5_monthly_maxes(client, lat, lon, year, month)
                 model_data = await fetch_model_monthly_maxes(client, lat, lon, year, month)
 
                 matched = 0
-                for d, actual in noaa_data.items():
+                for d, actual in era5_data.items():
                     model = model_data.get(d)
                     if model is not None:
                         monthly_pairs[month].append((model, actual))
                         matched += 1
 
                 console.print(
-                    f"  {year}-{month:02d}: NOAA={len(noaa_data)} model={len(model_data)} matched={matched}"
+                    f"  {year}-{month:02d}: ERA5={len(era5_data)} model={len(model_data)} matched={matched}"
                 )
 
             # Compute and store bias per month

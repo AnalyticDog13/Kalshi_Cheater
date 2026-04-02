@@ -12,90 +12,90 @@
 
 stations:
   KXHIGHNY:
-    station_id: "KNYC"          # Central Park, New York
-    latitude: 40.7789
-    longitude: -73.9692
+    station_id: "KNYC"          # Central Park, New York — NWS CLI station verified
+    latitude: 40.78333
+    longitude: -73.96667
     city: "New York"
     state: "NY"
     timezone: "America/New_York"
     notes: "Urban canyon location — GFS sometimes runs 1-2F warm in summer due to UHI"
 
   KXHIGHCHI:
-    station_id: "KORD"          # O'Hare International Airport, Chicago
-    latitude: 41.9742
-    longitude: -87.9073
+    station_id: "KMDW"          # Chicago Midway Airport — confirmed from Kalshi settlement text
+    latitude: 41.78417
+    longitude: -87.75528
     city: "Chicago"
     state: "IL"
     timezone: "America/Chicago"
-    notes: "Lake effect can cause rapid temperature swings; watch ensemble spread"
+    notes: "Lake effect can cause rapid temperature swings; watch ensemble spread. Kalshi uses Midway (KMDW), NOT O'Hare (KORD)."
 
   KXHIGHLAX:
-    station_id: "KCQT"          # Downtown LA / USC campus
-    latitude: 34.0236
-    longitude: -118.2912
+    station_id: "KLAX"          # Los Angeles International Airport — confirmed from Kalshi settlement text
+    latitude: 33.93806
+    longitude: -118.38889
     city: "Los Angeles"
     state: "CA"
     timezone: "America/Los_Angeles"
     notes: "Marine layer influence; ECMWF typically better than GFS for coastal CA"
 
   KXHIGHDC:
-    station_id: "KDCA"          # Reagan National Airport
-    latitude: 38.8512
-    longitude: -77.0402
+    station_id: "KDCA"          # Washington Reagan National Airport — NWS CLI station verified
+    latitude: 38.84833
+    longitude: -77.03417
     city: "Washington DC"
     state: "DC"
     timezone: "America/New_York"
     notes: "River location creates micro-climate; warmer than surrounding suburbs"
 
   KXHIGHHOU:
-    station_id: "KIAH"          # George Bush Intercontinental Airport
-    latitude: 29.9844
-    longitude: -95.3414
+    station_id: "KHOU"          # Houston Hobby Airport — NWS CLI for Houston uses Hobby, NOT Bush (KIAH)
+    latitude: 29.6375
+    longitude: -95.2825
     city: "Houston"
     state: "TX"
     timezone: "America/Chicago"
-    notes: "Verify against Kalshi settlement_sources — may use KHOU (Hobby) instead"
+    notes: "CRITICAL: NWS Daily CLI for Houston is issued from Hobby Airport (KHOU), not Bush Intercontinental (KIAH). Using KIAH would forecast the wrong location."
 
   KXHIGHMIA:
-    station_id: "KMIA"          # Miami International Airport
-    latitude: 25.7959
-    longitude: -80.2870
+    station_id: "KMIA"          # Miami International Airport — NWS CLI station verified
+    latitude: 25.79056
+    longitude: -80.31639
     city: "Miami"
     state: "FL"
     timezone: "America/New_York"
     notes: "Sea breeze dominant; afternoon convection common in summer"
 
   KXHIGHDEN:
-    station_id: "KDEN"          # Denver International Airport
-    latitude: 39.8561
-    longitude: -104.6737
+    station_id: "KDEN"          # Denver International Airport — NWS CLI station verified
+    latitude: 39.84658
+    longitude: -104.65622
     city: "Denver"
     state: "CO"
     timezone: "America/Denver"
     notes: "Elevation 5430ft; chinook winds can cause rapid 20-30F temperature swings"
 
   KXHIGHPHX:
-    station_id: "KPHX"          # Phoenix Sky Harbor International Airport
-    latitude: 33.4373
-    longitude: -112.0078
+    station_id: "KPHX"          # Phoenix Sky Harbor International Airport — NWS CLI station verified
+    latitude: 33.42780
+    longitude: -112.00347
     city: "Phoenix"
     state: "AZ"
     timezone: "America/Phoenix"
     notes: "Monsoon season (Jul-Sep) increases ensemble spread significantly"
 
   KXHIGHSEA:
-    station_id: "KSEA"          # Seattle-Tacoma International Airport
-    latitude: 47.4502
-    longitude: -122.3088
+    station_id: "KSEA"          # Seattle-Tacoma International Airport — NWS CLI station verified
+    latitude: 47.44472
+    longitude: -122.31361
     city: "Seattle"
     state: "WA"
     timezone: "America/Los_Angeles"
     notes: "Marine influence; ECMWF significantly better than GFS for Pacific coast"
 
   KXHIGHATL:
-    station_id: "KATL"          # Hartsfield-Jackson Atlanta International Airport
-    latitude: 33.6407
-    longitude: -84.4277
+    station_id: "KATL"          # Hartsfield-Jackson Atlanta International Airport — NWS CLI station verified
+    latitude: 33.64028
+    longitude: -84.42694
     city: "Atlanta"
     state: "GA"
     timezone: "America/New_York"

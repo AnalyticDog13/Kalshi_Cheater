@@ -72,7 +72,8 @@ async def validate_all(config_dir: str) -> int:
 
         # --- Check 1: NOAA coordinate validation ----------------------------
         try:
-            coord_ok, coord_msg = await noaa.validate_station_coordinates(
+            await noaa.get_station_info(station_id)  # populate cache before sync check
+            coord_ok, coord_msg = noaa.validate_station_coordinates(
                 station_id, config_lat, config_lon, tolerance_degrees=0.05
             )
             noaa_result = PASS if coord_ok else WARN

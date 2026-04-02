@@ -18,8 +18,8 @@ api:
 
 scanner:
   poll_interval_minutes: 5
-  min_volume_fp: 50               # minimum total contracts traded
-  max_spread_dollars: 0.08        # max acceptable bid-ask spread
+  min_volume_fp: 5                # minimum total contracts traded (lowered from 50 — Kalshi weather markets are thin)
+  max_spread_dollars: 0.15        # max acceptable bid-ask spread (raised from 0.08 — weather markets have wider spreads)
   min_resolution_hours: 6         # don't enter markets resolving soon
   max_resolution_days: 7          # forecast accuracy window
 
@@ -84,7 +84,7 @@ regime:
 
 notifications:
   enabled: true
-  method: "log_only"   # "telegram", "webhook", or "log_only"
+  method: "telegram"   # "telegram", "webhook", or "log_only"
 
 scheduling:
   high_frequency_windows:
@@ -114,7 +114,7 @@ experimentation:
     assumed_slippage: 0.01
     fee_multiple_required: 3.0
     min_ensemble_members: 30
-    min_volume_fp: 50
+    min_volume_fp: 5
     kelly_fraction: 0.25
   # Exploratory arm — paper-only, NEVER places real orders
   exploratory:

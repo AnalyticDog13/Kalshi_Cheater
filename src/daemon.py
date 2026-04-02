@@ -116,6 +116,9 @@ class TradingDaemon:
         # Daily summary tracking — send once per UTC day
         self._last_summary_date: date | None = None
 
+        # Report tracking — generate file reports at midnight UTC
+        self._last_report_date: date | None = None
+
         # Pause flag path — set by CLI `pause` command; checked each cycle
         self._pause_flag = Path(pause_flag_path)
 
@@ -375,11 +378,19 @@ class TradingDaemon:
             if result.risk.approved and not paused:
                 await self._execute_trade(result)
 
-        # --- 6. Daily summary --------------------------------------------
+        # --- 6. Daily summary + file reports -----------------------------
         today_utc = now_utc.date()
         if self._last_summary_date is None or today_utc > self._last_summary_date:
             await self._send_daily_summary()
             self._last_summary_date = today_utc
+
+        if self._last_report_date is None or today_utc > self._last_report_date:
+            await asyncio.to_thread(self._write_daily_report, today_utc)
+            # Weekly report fires when yesterday (the just-completed day) was Sunday
+            yesterday_utc = today_utc - timedelta(days=1)
+            if yesterday_utc.weekday() == 6:  # Sunday = 6
+                await asyncio.to_thread(self._write_weekly_report, yesterday_utc)
+            self._last_report_date = today_utc
 
     # ------------------------------------------------------------------
     # Trade execution (conservative arm)
@@ -843,6 +854,50 @@ class TradingDaemon:
             )
         except Exception as exc:
             logger.warning("Failed to send daily summary: %s", exc)
+
+    # ------------------------------------------------------------------
+    # File report generation (called via asyncio.to_thread — sync)
+    # ------------------------------------------------------------------
+
+    def _write_daily_report(self, for_date: date) -> None:
+        """
+        Write the daily markdown report for yesterday's activity.
+        Called once per UTC day at the first cycle after midnight.
+        Errors are caught and logged so a report failure never stops trading.
+        """
+        try:
+            from scripts.generate_reports import generate_daily_report
+            yesterday = for_date - timedelta(days=1)
+            path = generate_daily_report(
+                db_path=self.tracker._db_path,
+                report_date=yesterday,
+                settings=self._settings,
+            )
+            logger.info("Daily report written: %s", path)
+        except Exception as exc:
+            logger.warning("Failed to write daily report: %s", exc)
+
+    def _write_weekly_report(self, week_end: date) -> None:
+        """
+        Write the weekly markdown report and feed-to-AI package.
+        Called once per week when yesterday was Sunday.
+        """
+        try:
+            from scripts.generate_reports import generate_weekly_report, generate_feed_to_ai
+            weekly_path = generate_weekly_report(
+                db_path=self.tracker._db_path,
+                week_end=week_end,
+                settings=self._settings,
+            )
+            ai_path = generate_feed_to_ai(
+                db_path=self.tracker._db_path,
+                current_week_path=weekly_path,
+                settings=self._settings,
+            )
+            logger.info("Weekly report written: %s", weekly_path)
+            logger.info("Feed-to-AI package written: %s", ai_path)
+        except Exception as exc:
+            logger.warning("Failed to write weekly report: %s", exc)
 
     # ------------------------------------------------------------------
     # Scheduling

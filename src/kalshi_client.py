@@ -463,7 +463,18 @@ class KalshiClient:
             cache_key="positions",
             ttl=self.cache_ttl_portfolio,
         )
-        return getattr(response, "positions", []) or []
+        # Try all known field names — SDK versions differ
+        positions = (
+            getattr(response, "positions", None)
+            or getattr(response, "market_positions", None)
+            or []
+        )
+        logger.warning(
+            "get_positions: found %d positions (attrs: %s)",
+            len(positions),
+            [a for a in dir(response) if not a.startswith('_')] if response else "None",
+        )
+        return positions
 
     async def get_orders(self, status: str = "open") -> list[Any]:
         """Fetch orders filtered by status."""

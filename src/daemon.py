@@ -374,10 +374,21 @@ class TradingDaemon:
         def _ticker(obj: Any) -> str | None:
             return getattr(obj, "ticker", None) or getattr(obj, "market_ticker", None)
 
+        # Manually excluded tickers — positions sold/closed manually outside the daemon.
+        # Remove entries once the market has resolved.
+        _manual_skip: set[str] = {
+            "KXHIGHDEN-26APR03-T59",  # Denver 59F sold manually 2026-04-03
+            "KXHIGHDEN-26APR03-T58",  # Denver 58F sold manually 2026-04-03
+        }
+
         open_order_tickers: set[str] = (
             {_ticker(o) for o in open_orders}
             | {_ticker(p) for p in open_positions}
+            | _manual_skip
         ) - {None}
+
+        placed_this_cycle = 0
+        max_orders = self.conservative_risk.limits.max_open_orders
 
         for result in scan_results:
             if self._stop_event.is_set():
@@ -394,7 +405,14 @@ class TradingDaemon:
                         result.market_ticker,
                     )
                     continue
+                if open_orders_count + placed_this_cycle >= max_orders:
+                    logger.info(
+                        "Open orders cap reached (%d+%d >= %d) — stopping execution for this cycle.",
+                        open_orders_count, placed_this_cycle, max_orders,
+                    )
+                    break
                 await self._execute_trade(result)
+                placed_this_cycle += 1
 
         # --- 6. Daily summary + file reports -----------------------------
         today_utc = now_utc.date()

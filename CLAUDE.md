@@ -6,6 +6,18 @@
 
 ---
 
+## BUGS FIXED (session 10 — 2026-04-03)
+*get_positions() deduplication bug causing runaway orders on filled positions.*
+
+| Bug | File | Fix applied |
+|-----|------|-------------|
+| #1 CRITICAL | `src/daemon.py` | `open_order_tickers` dedup used `getattr(o, "ticker")` only — positions use `market_ticker`. Fixed with helper that tries both attribute names |
+| #2 CRITICAL | `src/kalshi_client.py` | `get_positions()` returning empty list — added `settlement_status="unsettled"` param and fallback to `market_positions` attr. Added WARNING log to show raw response attrs |
+
+**Result of bug:** Denver YES position (8 contracts from session 9) was not detected, daemon re-placed orders every cycle accumulating 12 Denver contracts total. $0.84 at risk (7¢ each), payout $12 if Denver hits 59°F today.
+
+**Status of `get_positions()` fix:** PARTIALLY FIXED. The `settlement_status="unsettled"` param and dual-attr fallback are in place but NOT YET VERIFIED — need one clean cycle to confirm reconciliation shows `2 Kalshi positions` instead of `0`.
+
 ## BUGS FIXED (session 9 — 2026-04-02)
 *6 runtime bugs found and fixed during first live trading session.*
 
@@ -37,34 +49,43 @@
 ## BUILD PROGRESS LOG
 *Last updated: 2026-04-02 (session 9 — First live trading session. Fixed 7 runtime bugs. Daemon now placing real orders correctly.). Update this section at the start of every new session.*
 
-### Current Status: 521/521 tests passing. LIVE real-money trading active. Orders placed on Chicago, Miami, Denver markets.
+### Current Status: 521/521 tests passing. LIVE trading active. get_positions() bug partially fixed — needs verification next session.
 
 ### Live Configuration (current)
-- **Bankroll:** $30 (live Kalshi account)
+- **Bankroll:** ~$28-30 (live Kalshi account, exact balance after Apr 3 resolutions unknown)
 - **Environment:** LIVE Kalshi API (`api.elections.kalshi.com`) — real money, real fills, NOT demo
 - `config/settings.yaml`: `trading_mode: "live"`, `max_position_dollars: 1.00`,
   `max_total_exposure_dollars: 15.00`, `max_daily_loss_dollars: 3.00`, `max_open_orders: 5`,
   `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager),
   `min_volume_fp: 0` (Kalshi weather markets open at zero volume)
-  - Rationale: $30 bankroll; 50% max exposure ($15), 10% daily loss limit ($3), 5 open orders
 - `src/risk_manager.py`: 12-point pre-trade checklist; Check 11 accepts `"active"` or `"open"`
-- `src/daemon.py`: balance fallback set to $30.0; deduplication prevents re-ordering open tickers
+- `src/daemon.py`: dedup helper `_ticker()` tries both `ticker` and `market_ticker` attrs
+- `src/kalshi_client.py`: `get_positions()` calls with `settlement_status="unsettled"`, tries `positions` then `market_positions` attr, logs WARNING with attr list if empty
 - `src/order_executor.py`: BUY_YES empty-book price capped at $0.50
 - Test count: 521/521
 
-### KNOWN REMAINING ISSUES (as of session 9)
-- `parse_err=28` per cycle — the 28 "between" range markets (B71.5 format) are correctly skipped but still counted in parse_err. Cosmetic only, no trading impact.
-- `time_filtered=18` per cycle — Apr 2 markets are outside the forecast window (ensemble only goes back to Apr 3). These resolve today and can't be traded. Expected.
-- `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — these series return 404 on the series endpoint. The default 0.07 is used. No trading impact since these series have 0 open markets anyway.
-- Markets with `spread=999.0F` and `0 ensemble members` — these are Apr 2 markets where the ensemble has no data (past its window). Correctly rejected by Checks 4/5/6/7.
+### Open positions as of end of session 10 (2026-04-03 ~1am UTC)
+- Chicago "59° or below" NO × 2 @ 52¢ — up ~75% unrealized. Resolves Apr 3.
+- Denver "59° or above" YES × 12 @ 7¢ — $0.84 cost, payout $12 if Denver hits 59°F. Resolves Apr 3. (12 contracts due to dedup bug — financially low risk since it's 7¢/contract)
+- Resting orders cancelled before sleep: all cleared.
+
+### KNOWN REMAINING ISSUES (as of session 10)
+- `get_positions()` returning 0 positions despite real filled positions existing — fix applied but NOT verified. Must confirm next session before letting daemon run unattended.
+- `parse_err=20-24` per cycle — B-range markets correctly skipped but counted. Cosmetic only.
+- `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — 404 on series endpoint, uses default 0.07. No trading impact.
+- AI thinks dates are "over a year away" — its training cutoff is before April 2026. It still returns `proceed=True` on all trades so no functional impact, just noisy concern messages.
 
 ### NEXT STEP (read this first on new session)
-**Daemon is working. Cancel any stale orders on Kalshi, then restart.**
+**CRITICAL: Verify get_positions() fix before running daemon unattended.**
 
-1. Check Kalshi for open orders — cancel any duplicates or the Denver $0.98 order if still open
-2. Run `python -m src.main start --live`
-3. Verify cycle output shows: `liq_filtered=0`, `evaluated=14`, `approved=6`, no duplicate orders placed
-4. Let it run — markets resolve tomorrow (Apr 3). Check results on Apr 4.
+1. Check Kalshi portfolio — see how Apr 3 markets resolved (Chicago + Denver). Note P&L.
+2. Cancel any resting orders if any exist.
+3. Run `python -m src.main start --live` and paste the first 10 lines to Claude Code.
+4. Look for: `Reconciliation done: N Kalshi positions` — N must be > 0 if you have open positions, OR 0 if all Apr 3 markets have resolved overnight (which is fine).
+5. Look for WARNING line: `get_positions: found N positions (attrs: [...])` — this shows what the SDK returns. If N=0 and you have real positions, the attr list will tell Claude Code which field name to use.
+6. If reconciliation shows 0 positions AND you have no real open positions (all resolved), the bug may be moot — new day's markets haven't been bet yet.
+7. Watch cycle 1 carefully — it should place fresh orders on Apr 4 markets only, with NO duplicates in cycle 2.
+8. Only leave it running unattended on VPS once cycle 2 shows zero new orders on tickers already covered.
 
 ---
 

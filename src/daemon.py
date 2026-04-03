@@ -314,9 +314,11 @@ class TradingDaemon:
         try:
             open_orders = await self.kalshi_client.get_orders(status="open")
             open_orders_count = len(open_orders)
+            open_positions = await self.kalshi_client.get_positions()
             self.health_monitor.record_success("kalshi_api")
         except Exception as exc:
             open_orders_count = 0
+            open_positions = []
             just_tripped = self.health_monitor.record_failure("kalshi_api", str(exc))
             if just_tripped:
                 await self.notifier.send_circuit_breaker("kalshi_api", str(exc))
@@ -367,6 +369,16 @@ class TradingDaemon:
                 self._pause_flag,
             )
 
+        # Build set of tickers that already have an open order OR an existing position.
+        # Skip both — don't re-order a market we already bet on this cycle.
+        def _ticker(obj: Any) -> str | None:
+            return getattr(obj, "ticker", None) or getattr(obj, "market_ticker", None)
+
+        open_order_tickers: set[str] = (
+            {_ticker(o) for o in open_orders}
+            | {_ticker(p) for p in open_positions}
+        ) - {None}
+
         for result in scan_results:
             if self._stop_event.is_set():
                 logger.info("Stop signal mid-cycle — halting execution loop.")
@@ -376,6 +388,12 @@ class TradingDaemon:
             await self._evaluate_exploratory(result, portfolio_balance)
 
             if result.risk.approved and not paused:
+                if result.market_ticker in open_order_tickers:
+                    logger.debug(
+                        "Skipping %s — open order already exists.",
+                        result.market_ticker,
+                    )
+                    continue
                 await self._execute_trade(result)
 
         # --- 6. Daily summary + file reports -----------------------------

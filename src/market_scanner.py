@@ -394,10 +394,12 @@ class MarketScanner:
             else:
                 summary.filtered_liquidity += 1
                 logger.debug(
-                    "Liquidity filter: skip %s (vol=%.0f spread=%.3f)",
+                    "Liquidity filter: skip %s (vol=%.2f spread=%.3f min_vol=%.1f max_spread=%.2f)",
                     getattr(m, "ticker", "?"),
                     parse_quantity(getattr(m, "volume_fp", None)),
                     self._compute_spread(m),
+                    self.risk_limits.min_volume_fp,
+                    self.risk_limits.max_spread_dollars,
                 )
 
         if not liquid:
@@ -508,10 +510,12 @@ class MarketScanner:
                 open_orders_count=open_orders_count,
             )
 
-            # AI SANITY CHECK — only runs when edge is suspiciously large (>15pp)
-            # and an AIReasoner has been injected. When ai_reasoner=None the
-            # SANITY_CHECK recommendation passes through to the caller unchanged.
-            if edge.recommendation == "SANITY_CHECK" and self.ai_reasoner is not None:
+            # AI SANITY CHECK — only runs when edge is suspiciously large (>15pp),
+            # an AIReasoner has been injected, AND the risk check already passed.
+            # Skip the AI call if risk already rejected — no point spending API budget.
+            if (edge.recommendation == "SANITY_CHECK"
+                    and self.ai_reasoner is not None
+                    and risk.approved):
                 station_name = station_config.get("city", series_ticker)
                 direction_str = "above" if direction == "above" else "below"
                 ensemble_details = (
@@ -651,6 +655,12 @@ class MarketScanner:
         """
         ticker = getattr(market, "ticker", None)
         if not ticker:
+            return None, "above"
+
+        # Skip "between" range markets (e.g. KXHIGHNY-26APR03-B71.5 → "be 71-72°").
+        # These resolve YES only within a narrow band, requiring P(71≤max<72) which
+        # the current probability engine doesn't compute. Skip silently.
+        if re.search(r'[_\-]B\d', ticker, re.IGNORECASE):
             return None, "above"
 
         title = getattr(market, "title", "") or ""

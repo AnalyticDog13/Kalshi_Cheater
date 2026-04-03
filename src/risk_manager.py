@@ -323,12 +323,12 @@ class RiskManager:
         # ----------------------------------------------------------
         # Check 11: Market status is "open"
         # ----------------------------------------------------------
-        if market_status != "open":
+        if market_status not in ("open", "active"):
             failed.append(
-                f"Check 11 FAIL: market status is '{market_status}' (need 'open')"
+                f"Check 11 FAIL: market status is '{market_status}' (need 'open' or 'active')"
             )
         else:
-            notes.append("Check 11 OK: market status=open")
+            notes.append(f"Check 11 OK: market status={market_status}")
 
         # ----------------------------------------------------------
         # Check 12: Contract price hard cap — never pay > $0.50 per contract

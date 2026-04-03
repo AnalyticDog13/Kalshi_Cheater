@@ -40,6 +40,7 @@ STALE_ORDER_MINUTES: float = 10.0
 PRICE_STALENESS_THRESHOLD: float = 0.02   # 2 cents — skip if mid drifted by this
 MIN_ORDER_PRICE: float = 0.01
 MAX_ORDER_PRICE: float = 0.99
+MAX_CONTRACT_PRICE: float = 0.50  # hard cap — never pay more than $0.50 per contract
 
 
 # ---------------------------------------------------------------------------
@@ -165,8 +166,9 @@ class OrderExecutor:
             if fresh_yes_bid > 0.0:
                 order_price = fresh_yes_bid
             else:
-                # Empty book — place just below our fair value to become best bid
-                order_price = round(edge.fair_value - 0.02, 2)
+                # Empty book — place just below our fair value, capped at hard price limit.
+                # Without the cap, 100%-probability markets would produce orders at $0.98+.
+                order_price = min(round(edge.fair_value - 0.02, 2), MAX_CONTRACT_PRICE)
 
         else:  # BUY_NO
             side = "no"

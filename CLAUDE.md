@@ -6,6 +6,19 @@
 
 ---
 
+## BUGS FIXED (session 9 — 2026-04-02)
+*6 runtime bugs found and fixed during first live trading session.*
+
+| Bug | File | Fix applied |
+|-----|------|-------------|
+| #1 CRITICAL | `src/daemon.py` | Duplicate orders every cycle — added `open_order_tickers` set; skip re-ordering tickers with existing open orders |
+| #2 CRITICAL | `src/order_executor.py` | BUY_YES empty-book fallback used `fair_value - 0.02` uncapped — 100% ensemble → $0.98 order. Added `MAX_CONTRACT_PRICE = 0.50` cap |
+| #3 HIGH | `src/risk_manager.py` | Check 11 required status `"open"` but Kalshi returns `"active"` — all markets rejected. Now accepts both |
+| #4 MEDIUM | `src/market_scanner.py` | AI sanity check fired on already-rejected markets, wasting Claude API budget. Now only fires when `risk.approved == True` |
+| #5 MEDIUM | `src/market_scanner.py` | `_compute_spread()` defaulted missing YES ask to $1.00, making all empty-book markets look like $0.55+ spread. Now infers from NO bid, returns 0.0 if both absent |
+| #6 MEDIUM | `config/settings.yaml` | `min_volume_fp: 5` blocked all markets (all had vol=0.00 — freshly opened). Changed to `0` |
+| #7 LOW | `src/market_scanner.py` | "Between" range markets (`B71.5` format, title "be 71-72°") caused parse warnings. Now silently skipped at ticker detection |
+
 ## BUGS FIXED (session 8 — 2026-04-02)
 *All 5 bugs from the session 7 audit were fixed. 521/521 tests still passing.*
 
@@ -22,34 +35,36 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-02 (session 8 — Fixed all 5 audit bugs, added report system, updated to $30 bankroll. Ready to run live.). Update this section at the start of every new session.*
+*Last updated: 2026-04-02 (session 9 — First live trading session. Fixed 7 runtime bugs. Daemon now placing real orders correctly.). Update this section at the start of every new session.*
 
-### Current Status: 521/521 tests passing. LIVE real-money trading on live Kalshi. All bugs fixed. Report system active.
+### Current Status: 521/521 tests passing. LIVE real-money trading active. Orders placed on Chicago, Miami, Denver markets.
 
 ### Live Configuration (current)
 - **Bankroll:** $30 (live Kalshi account)
 - **Environment:** LIVE Kalshi API (`api.elections.kalshi.com`) — real money, real fills, NOT demo
 - `config/settings.yaml`: `trading_mode: "live"`, `max_position_dollars: 1.00`,
   `max_total_exposure_dollars: 15.00`, `max_daily_loss_dollars: 3.00`, `max_open_orders: 5`,
-  `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager)
+  `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager),
+  `min_volume_fp: 0` (Kalshi weather markets open at zero volume)
   - Rationale: $30 bankroll; 50% max exposure ($15), 10% daily loss limit ($3), 5 open orders
-- `src/risk_manager.py`: 12-point pre-trade checklist including Check 12 (entry_price ≤ $0.50)
-- `src/daemon.py`: balance fallback set to $30.0
+- `src/risk_manager.py`: 12-point pre-trade checklist; Check 11 accepts `"active"` or `"open"`
+- `src/daemon.py`: balance fallback set to $30.0; deduplication prevents re-ordering open tickers
+- `src/order_executor.py`: BUY_YES empty-book price capped at $0.50
 - Test count: 521/521
 
-### NEXT STEP (read this first on new session)
-**All bugs are fixed. Proceed to Phase 3 operational steps to start live trading.**
+### KNOWN REMAINING ISSUES (as of session 9)
+- `parse_err=28` per cycle — the 28 "between" range markets (B71.5 format) are correctly skipped but still counted in parse_err. Cosmetic only, no trading impact.
+- `time_filtered=18` per cycle — Apr 2 markets are outside the forecast window (ensemble only goes back to Apr 3). These resolve today and can't be traded. Expected.
+- `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — these series return 404 on the series endpoint. The default 0.07 is used. No trading impact since these series have 0 open markets anyway.
+- Markets with `spread=999.0F` and `0 ensemble members` — these are Apr 2 markets where the ensemble has no data (past its window). Correctly rejected by Checks 4/5/6/7.
 
-1. Ensure `.env` contains live credentials:
-   ```
-   TRADING_MODE=live
-   KALSHI_LIVE_API_KEY_ID=your_live_key_id
-   KALSHI_LIVE_PRIVATE_KEY_PATH=/path/to/live_private_key.pem
-   ```
-2. Run `python scripts/smoke_test.py` — verify all API credentials
-3. Run `python scripts/validate_stations.py` — verify station mappings
-4. Run `python scripts/compute_station_bias.py --days-back 365` — build bias corrections (~10-15 min)
-5. Run `python -m src.main start --live` — start daemon in live mode (BOTH `trading_mode: "live"` in settings.yaml AND `--live` flag required)
+### NEXT STEP (read this first on new session)
+**Daemon is working. Cancel any stale orders on Kalshi, then restart.**
+
+1. Check Kalshi for open orders — cancel any duplicates or the Denver $0.98 order if still open
+2. Run `python -m src.main start --live`
+3. Verify cycle output shows: `liq_filtered=0`, `evaluated=14`, `approved=6`, no duplicate orders placed
+4. Let it run — markets resolve tomorrow (Apr 3). Check results on Apr 4.
 
 ---
 

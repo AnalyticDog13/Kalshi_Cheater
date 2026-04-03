@@ -357,9 +357,12 @@ class TradingDaemon:
 
         # Pull filled-but-unresolved positions from local DB — persists across restarts.
         # This is the reliable source of truth since get_positions() returns None from Kalshi.
+        # Filter to conservative arm only: exploratory paper trades should never block
+        # real order placement on the same ticker.
         db_open_tickers: set[str] = {
             t.market_ticker
             for t in self.tracker.get_open_positions()
+            if t.strategy_arm != "exploratory"
         }
         if db_open_tickers:
             logger.info("DB open positions (dedup): %s", sorted(db_open_tickers))
@@ -719,35 +722,39 @@ class TradingDaemon:
 
     async def _sync_fills(self) -> None:
         """
-        Check Kalshi for recently filled orders and update the tracker.
+        Check Kalshi for recently filled or cancelled orders and update the tracker.
 
-        Queries filled orders, cross-references with our pending conservative
-        trades (order_filled_time is None, not cancelled), and calls
-        tracker.update_fill() for matches. Exploratory trades are pre-filled
-        at recording time and don't need this step.
+        Fetches ALL orders in a single call (no status filter) then inspects
+        each order's `status` field directly.  This avoids the failure mode
+        where get_orders(status="filled") returns 0 results because Kalshi
+        uses a different status string (e.g. "executed" vs "filled", or
+        "canceled" vs "cancelled").
+
+        Every cycle logs a status-breakdown line so the actual Kalshi status
+        values are visible in the daemon logs for debugging.
         """
         if self.health_monitor.is_open("kalshi_api"):
             return
 
-        # Pending trades: placed but not yet confirmed filled
+        # Pending trades: conservative arm, placed but not yet confirmed filled.
+        # Uses get_pending_trades() (order_filled_time IS NULL) — NOT
+        # get_open_positions() (order_filled_time IS NOT NULL).  Those two
+        # conditions are mutually exclusive; using the wrong one means pending
+        # is always empty and fills are never detected.
         try:
-            open_positions = self.tracker.get_open_positions()
+            pending = self.tracker.get_pending_trades()
         except Exception as exc:
-            logger.warning("Could not query positions for fill sync: %s", exc)
+            logger.warning("Could not query pending trades for fill sync: %s", exc)
             return
 
-        pending = [
-            t for t in open_positions
-            if t.strategy_arm == "conservative"
-            and t.order_filled_time is None
-            and not t.order_cancelled
-        ]
         if not pending:
             return
 
+        # Fetch ALL orders without a status filter — one call, inspect status
+        # on each order object directly instead of relying on specific Kalshi
+        # status string values that have changed across API/SDK versions.
         try:
-            filled_orders = await self.kalshi_client.get_orders(status="filled")
-            cancelled_orders = await self.kalshi_client.get_orders(status="cancelled")
+            all_orders = await self.kalshi_client.get_orders(status=None)
             self.health_monitor.record_success("kalshi_api")
         except Exception as exc:
             just_tripped = self.health_monitor.record_failure("kalshi_api", str(exc))
@@ -755,45 +762,102 @@ class TradingDaemon:
                 await self.notifier.send_circuit_breaker("kalshi_api", str(exc))
             return
 
-        # Build lookup by order_id for filled orders
-        filled_by_id: dict[str, Any] = {}
-        for order in filled_orders:
-            oid = (
-                getattr(order, "order_id", None)
-                or getattr(order, "id", None)
-            )
-            if oid:
-                filled_by_id[oid] = order
+        # Diagnostic: log status distribution so we can see what Kalshi returns.
+        # This is the key tool for figuring out which status strings are real.
+        status_counts: dict[str, int] = {}
+        for order in all_orders:
+            s = str(getattr(order, "status", "unknown"))
+            status_counts[s] = status_counts.get(s, 0) + 1
+        logger.info(
+            "_sync_fills: fetched %d Kalshi orders. Status breakdown: %s. "
+            "Pending DB trades to match: %d",
+            len(all_orders),
+            status_counts or "(none)",
+            len(pending),
+        )
 
-        # Build set of cancelled order IDs from Kalshi
-        cancelled_ids_from_kalshi: set[str] = set()
-        for order in cancelled_orders:
-            oid = (
+        # Build lookup by order_id for fast matching
+        kalshi_by_id: dict[str, Any] = {}
+        for order in all_orders:
+            oid = str(
                 getattr(order, "order_id", None)
                 or getattr(order, "id", None)
+                or ""
             )
             if oid:
-                cancelled_ids_from_kalshi.add(str(oid))
+                kalshi_by_id[oid] = order
+
+        # Status strings that mean "filled" or "cancelled" across Kalshi versions.
+        # Kalshi has used at least: "filled", "executed", "canceled", "cancelled",
+        # "expired", "resting" (still open).  We match broadly and log what we see.
+        FILLED_STATUSES:    frozenset[str] = frozenset({"filled", "executed", "complete", "closed"})
+        CANCELLED_STATUSES: frozenset[str] = frozenset({"cancelled", "canceled", "expired", "voided"})
 
         for trade in pending:
-            # Mark as cancelled if Kalshi says it was cancelled
-            if trade.trade_id in cancelled_ids_from_kalshi:
-                self._mark_order_cancelled(trade.trade_id)
-                logger.info("Marked cancelled (synced from Kalshi): %s", trade.market_ticker)
+            order = kalshi_by_id.get(trade.trade_id)
+
+            if order is None:
+                # trade_id not in Kalshi orders — likely a pre-session-13 UUID
+                # trade whose order_id was never stored correctly.  Log at debug
+                # level (too noisy at info for known-unfixable old records).
+                logger.debug(
+                    "_sync_fills: no Kalshi order found for trade_id=%s (%s) — "
+                    "may be a pre-fix UUID trade that cannot be matched.",
+                    trade.trade_id,
+                    trade.market_ticker,
+                )
                 continue
 
-            order = filled_by_id.get(trade.trade_id)
-            if order is None:
-                continue  # Not yet filled — will check next cycle
+            order_status = str(getattr(order, "status", "")).lower().strip()
 
+            if order_status in CANCELLED_STATUSES:
+                self._mark_order_cancelled(trade.trade_id)
+                logger.info(
+                    "Marked cancelled (Kalshi status=%r): %s",
+                    order_status,
+                    trade.market_ticker,
+                )
+                continue
+
+            if order_status not in FILLED_STATUSES:
+                # Still resting/pending — not filled yet
+                logger.debug(
+                    "_sync_fills: order %s status=%r — still open, skipping.",
+                    trade.trade_id,
+                    order_status,
+                )
+                continue
+
+            # ---------------------------------------------------------------
+            # Order is filled — extract real fill price from Kalshi
+            # ---------------------------------------------------------------
             fill_price = _extract_fill_price(order, trade.side)
             if fill_price <= 0:
-                continue  # Can't determine price — skip
+                logger.warning(
+                    "_sync_fills: could not extract fill price for %s (status=%r). "
+                    "Available order fields: %s",
+                    trade.market_ticker,
+                    order_status,
+                    _order_field_summary(order),
+                )
+                continue
 
-            fill_time = _parse_datetime(
-                getattr(order, "close_time", None)
-                or getattr(order, "updated_time", None)
-            )
+            # Quantity cross-check: verify actual filled quantity matches DB.
+            # Partial fills are possible on thin books.
+            kalshi_qty = _extract_filled_quantity(order)
+            if kalshi_qty is not None and kalshi_qty > 0 and abs(kalshi_qty - trade.quantity) > 0.5:
+                logger.warning(
+                    "_sync_fills: quantity mismatch for %s — "
+                    "DB has %.0f contracts, Kalshi reports %.0f. "
+                    "Possible partial fill. Updating DB to Kalshi quantity.",
+                    trade.market_ticker,
+                    trade.quantity,
+                    kalshi_qty,
+                )
+            else:
+                kalshi_qty = None  # No mismatch — don't override DB value
+
+            fill_time = _extract_fill_time(order)
             was_maker = _detect_maker_fill(order, trade.entry_price, trade.side)
 
             try:
@@ -802,12 +866,15 @@ class TradingDaemon:
                     fill_price=fill_price,
                     fill_time=fill_time,
                     was_maker=was_maker,
+                    filled_quantity=kalshi_qty,
                 )
                 logger.info(
-                    "Fill confirmed: %s @ $%.2f (maker=%s)",
+                    "Fill confirmed: %s @ $%.4f qty=%.0f maker=%s (Kalshi status=%r)",
                     trade.market_ticker,
                     fill_price,
+                    kalshi_qty if kalshi_qty is not None else trade.quantity,
                     was_maker,
+                    order_status,
                 )
             except Exception as exc:
                 logger.warning(
@@ -857,12 +924,20 @@ class TradingDaemon:
                 logger.debug("Could not fetch market %s for resolution check: %s", ticker, exc)
                 continue
 
-            status = getattr(market, "status", "") or ""
+            # get_market() returns the inner market dict from GetMarketResponse
+            if isinstance(market, dict):
+                status = market.get("status", "") or ""
+                result = market.get("result", "") or ""
+                close_time_raw = market.get("close_time")
+            else:
+                status = getattr(market, "status", "") or ""
+                result = getattr(market, "result", "") or ""
+                close_time_raw = getattr(market, "close_time", None)
+
             if status != "settled":
                 continue
 
             # Market has settled — extract result
-            result = getattr(market, "result", None) or ""
             if result not in ("yes", "no"):
                 logger.warning(
                     "Settled market %s has unexpected result=%r — skipping auto-record",
@@ -873,9 +948,7 @@ class TradingDaemon:
             actual_outcome = 1 if result == "yes" else 0
 
             # Use market close_time as the resolution timestamp
-            resolution_time = _parse_datetime(
-                getattr(market, "close_time", None)
-            ) or datetime.now(timezone.utc)
+            resolution_time = _parse_datetime(close_time_raw) or datetime.now(timezone.utc)
 
             try:
                 self.tracker.record_outcome(
@@ -891,6 +964,18 @@ class TradingDaemon:
                 # Release exposure in risk manager for the settled position
                 settled_trades = [p for p in filled if p.market_ticker == ticker]
                 for trade in settled_trades:
+                    # Warn if fill_price is a sentinel value — means we never got
+                    # the real price from Kalshi, so P&L for this trade is unreliable.
+                    _SENTINEL_FILL_PRICES = {0.0, 0.50}
+                    if trade.fill_price in _SENTINEL_FILL_PRICES:
+                        logger.warning(
+                            "Resolving %s (trade_id=%s) with fill_price=%.2f — "
+                            "this is a placeholder, NOT the real Kalshi fill price. "
+                            "P&L for this trade is unreliable.",
+                            trade.market_ticker,
+                            trade.trade_id,
+                            trade.fill_price,
+                        )
                     exposure = trade.fill_price * trade.quantity
                     self.conservative_risk.record_position_closed(
                         dollars=exposure,
@@ -1212,27 +1297,134 @@ def _parse_balance(balance_obj: Any) -> float:
 
 def _extract_fill_price(order: Any, side: str) -> float:
     """
-    Extract the execution price from a Kalshi filled order object.
+    Extract the actual execution price from a Kalshi filled order object.
+
+    Priority order:
+      1. avg_price   — average fill price; most accurate for partial fills
+      2. yes_price / no_price — per-side price in cents or dollars
+      3. yes_bid_dollars / no_bid_dollars — dollar-string format
+      4. price       — generic fallback
 
     The SDK returns prices as integers (cents) or dollar strings depending
-    on the endpoint. This function handles both formats.
+    on the endpoint/version.  Values > 1.0 are treated as cents and divided
+    by 100; values <= 1.0 are already in dollars.
+
+    Logs a debug line showing which field was used so fill-price sourcing
+    is visible in the daemon logs.
     """
-    attrs = (
-        ["yes_price", "yes_bid_dollars", "price"]
-        if side.upper() == "YES"
-        else ["no_price", "no_bid_dollars", "price"]
-    )
-    for attr in attrs:
+    # avg_price is the most reliable field for the actual execution price —
+    # try it first regardless of side.
+    for attr in ("avg_price",):
         val = getattr(order, attr, None)
         if val is None:
             continue
         try:
             price = float(val)
-            # If value looks like cents (> 1.0 but ≤ 99), convert
-            return price / 100.0 if price > 1.0 else price
+            if price > 0:
+                result = price / 100.0 if price > 1.0 else price
+                logger.debug("_extract_fill_price: used %r = %.4f", attr, result)
+                return result
+        except (TypeError, ValueError):
+            pass
+
+    # Side-specific fields
+    side_attrs = (
+        ["yes_price", "yes_bid_dollars"]
+        if side.upper() == "YES"
+        else ["no_price", "no_bid_dollars"]
+    )
+    for attr in side_attrs + ["price"]:
+        val = getattr(order, attr, None)
+        if val is None:
+            continue
+        try:
+            price = float(val)
+            if price > 0:
+                result = price / 100.0 if price > 1.0 else price
+                logger.debug("_extract_fill_price: used %r = %.4f", attr, result)
+                return result
         except (TypeError, ValueError):
             pass
     return 0.0
+
+
+def _extract_fill_time(order: Any) -> datetime:
+    """
+    Extract the fill timestamp from a Kalshi filled order object.
+
+    Tries multiple attribute names in priority order:
+      updated_time > fill_time > execution_time > close_time > placed_time
+
+    Falls back to now() if none are parseable.
+    """
+    for attr in ("updated_time", "fill_time", "execution_time", "close_time", "placed_time"):
+        raw = getattr(order, attr, None)
+        if raw is not None:
+            result = _parse_datetime(raw)
+            if result is not None:
+                return result
+    return datetime.now(timezone.utc)
+
+
+def _extract_filled_quantity(order: Any) -> float | None:
+    """
+    Extract the actual filled quantity from a Kalshi filled order object.
+
+    Returns None if the quantity cannot be determined (caller should keep
+    the DB value in that case).
+
+    For a fully filled order: filled_count or count gives the total.
+    For a partially filled order: count - remaining_count gives filled qty.
+    """
+    # Direct filled-quantity field
+    for attr in ("filled_count", "filled_count_fp", "executed_count"):
+        val = getattr(order, attr, None)
+        if val is not None:
+            try:
+                qty = float(val)
+                if qty > 0:
+                    return qty
+            except (TypeError, ValueError):
+                pass
+
+    # Derive from count - remaining_count
+    count_val = getattr(order, "count", None) or getattr(order, "count_fp", None)
+    remaining_val = getattr(order, "remaining_count", None)
+    if count_val is not None and remaining_val is not None:
+        try:
+            filled = float(count_val) - float(remaining_val)
+            if filled > 0:
+                return filled
+        except (TypeError, ValueError):
+            pass
+
+    # Fall back to total count for fully-filled orders
+    if count_val is not None:
+        try:
+            qty = float(count_val)
+            if qty > 0:
+                return qty
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
+def _order_field_summary(order: Any) -> str:
+    """
+    Return a compact summary of non-None attributes on a Kalshi order object.
+    Used in warning logs when fill price extraction fails, so we can see
+    exactly which fields Kalshi returned and diagnose the right field name.
+    """
+    try:
+        if hasattr(order, "model_dump"):
+            dump = order.model_dump()
+            return str({k: v for k, v in dump.items() if v is not None})
+        if hasattr(order, "__dict__"):
+            return str({k: v for k, v in order.__dict__.items() if v is not None})
+        return repr(order)
+    except Exception:
+        return repr(order)
 
 
 def _detect_maker_fill(order: Any, entry_price: float, side: str) -> bool:

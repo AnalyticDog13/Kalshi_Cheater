@@ -321,8 +321,10 @@ class AIReasoner:
         edge: float,
     ) -> str:
         """Build the sanity-check prompt. Kept as a method for testability."""
+        today = datetime.now(timezone.utc).date().isoformat()
         return (
             "You are reviewing a weather prediction market trade.\n\n"
+            f"Today's date (UTC): {today}\n"
             f"Market: {market_description}\n"
             f"Ensemble probability (from {ensemble_details}): {ensemble_prob:.1%}\n"
             f"Current Kalshi market price: {market_price:.1%}\n"

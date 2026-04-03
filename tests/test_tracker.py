@@ -218,6 +218,20 @@ class TestUpdateFill:
         assert isinstance(row["order_filled_time"], str)
         assert "14:30" in row["order_filled_time"]
 
+    def test_filled_quantity_updates_quantity_when_provided(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1", quantity=10.0))
+        t.update_fill("t1", fill_price=0.55, fill_time=_dt(hour=13), was_maker=True, filled_quantity=7.0)
+        row = t.db["trades"].get("t1")
+        assert row["quantity"] == pytest.approx(7.0)
+
+    def test_filled_quantity_none_leaves_quantity_unchanged(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1", quantity=10.0))
+        t.update_fill("t1", fill_price=0.55, fill_time=_dt(hour=13), was_maker=True, filled_quantity=None)
+        row = t.db["trades"].get("t1")
+        assert row["quantity"] == pytest.approx(10.0)
+
 
 # ---------------------------------------------------------------------------
 # record_outcome
@@ -532,6 +546,46 @@ class TestGetOpenPositions:
         assert pos.was_maker_fill is True
         assert pos.ai_was_consulted is True
         assert pos.order_cancelled is False
+
+
+# ---------------------------------------------------------------------------
+# get_pending_trades
+# ---------------------------------------------------------------------------
+
+class TestGetPendingTrades:
+    def test_returns_unfilled_conservative_trades(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1", strategy_arm="conservative"))  # order_filled_time=None
+        pending = t.get_pending_trades()
+        assert len(pending) == 1
+        assert pending[0].trade_id == "t1"
+
+    def test_excludes_filled_trades(self):
+        t = _make_tracker()
+        rec = _record("t1")
+        rec.order_filled_time = _dt(hour=13)
+        t.record_trade(rec)
+        assert t.get_pending_trades() == []
+
+    def test_excludes_cancelled_trades(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1", order_cancelled=True))
+        assert t.get_pending_trades() == []
+
+    def test_excludes_exploratory_trades(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1", strategy_arm="exploratory"))
+        assert t.get_pending_trades() == []
+
+    def test_returns_multiple_pending(self):
+        t = _make_tracker()
+        t.record_trade(_record("t1"))
+        t.record_trade(_record("t2", market_ticker="KXHIGHCHI-26APR01-T65"))
+        assert len(t.get_pending_trades()) == 2
+
+    def test_empty_when_no_trades(self):
+        t = _make_tracker()
+        assert t.get_pending_trades() == []
 
 
 # ---------------------------------------------------------------------------

@@ -205,7 +205,7 @@ class TestMakerPricingBuyYes:
         assert result.side == "yes"
 
     def test_buy_yes_empty_book_uses_fair_value_minus_buffer(self):
-        """When book is empty (bid=0), fall back to fair_value - 0.02."""
+        """When book is empty (bid=0), fall back to min(fair_value - 0.02, MAX_CONTRACT_PRICE=0.50)."""
         executor, client = _make_executor()
         edge = _mock_edge(direction="BUY_YES", market_price=0.60, fair_value=0.70)
         client.get_orderbook.return_value = _mock_book(yes_bid=0.0, yes_ask=0.61)
@@ -213,7 +213,8 @@ class TestMakerPricingBuyYes:
 
         result = _run(executor.place_order(edge, "KXHIGHNY-26APR01-T75"))
 
-        assert result.price == pytest.approx(0.68, abs=0.01)  # 0.70 - 0.02
+        # 0.70 - 0.02 = 0.68, but MAX_CONTRACT_PRICE cap brings it down to 0.50
+        assert result.price == pytest.approx(0.50, abs=0.01)
         assert result.was_placed is True
 
     def test_order_price_clamped_to_min(self):

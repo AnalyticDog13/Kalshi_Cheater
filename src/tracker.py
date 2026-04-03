@@ -170,6 +170,7 @@ class Tracker:
         fill_price: float,
         fill_time: datetime,
         was_maker: bool,
+        filled_quantity: float | None = None,
     ) -> None:
         """
         Update a trade when the limit order fills.
@@ -177,27 +178,33 @@ class Tracker:
         Computes realized_slippage = fill_price - mid_price_at_signal.
 
         Args:
-            order_id:   trade_id of the order that filled
-            fill_price: price the order was filled at
-            fill_time:  when the fill occurred
-            was_maker:  True if maker fill (zero fees)
+            order_id:         trade_id of the order that filled
+            fill_price:       actual execution price from Kalshi
+            fill_time:        when the fill occurred
+            was_maker:        True if maker fill (zero fees)
+            filled_quantity:  actual filled quantity from Kalshi (optional).
+                              When provided, overwrites the DB quantity so
+                              partial fills are recorded correctly.  Pass
+                              None to keep the DB quantity unchanged.
         """
         row = self.db[self.TABLE].get(order_id)
         mid = row["mid_price_at_signal"]
         slippage = fill_price - mid
 
-        self.db[self.TABLE].update(
-            order_id,
-            {
-                "fill_price":        fill_price,
-                "order_filled_time": _dt_to_str(fill_time),
-                "was_maker_fill":    int(was_maker),
-                "realized_slippage": slippage,
-            },
-        )
+        updates: dict[str, Any] = {
+            "fill_price":        fill_price,
+            "order_filled_time": _dt_to_str(fill_time),
+            "was_maker_fill":    int(was_maker),
+            "realized_slippage": slippage,
+        }
+        if filled_quantity is not None:
+            updates["quantity"] = filled_quantity
+
+        self.db[self.TABLE].update(order_id, updates)
         logger.debug(
-            "Updated fill for %s: price=%.4f slippage=%.4f maker=%s",
+            "Updated fill for %s: price=%.4f slippage=%.4f maker=%s qty=%s",
             order_id, fill_price, slippage, was_maker,
+            f"{filled_quantity:.0f}" if filled_quantity is not None else "unchanged",
         )
 
     def record_outcome(
@@ -341,6 +348,31 @@ class Tracker:
                 "AND actual_outcome IS NULL "
                 "AND order_cancelled = 0",
                 order_by="order_filled_time ASC",
+            )
+        )
+        return [_from_row(row) for row in rows]
+
+    def get_pending_trades(self) -> list[TradeRecord]:
+        """
+        Return all conservative-arm trades that have been placed but not yet
+        confirmed filled or cancelled — i.e. orders resting on Kalshi's book.
+
+        These are the records _sync_fills() needs to check against Kalshi
+        each cycle to detect fills and cancellations.
+
+          - order_filled_time IS NULL  (not yet filled)
+          - order_cancelled = 0        (not already marked cancelled)
+          - strategy_arm = 'conservative'  (exploratory trades are pre-filled)
+
+        Returns:
+            List of TradeRecord objects, ordered by order_placed_time ascending.
+        """
+        rows = list(
+            self.db[self.TABLE].rows_where(
+                "order_filled_time IS NULL "
+                "AND order_cancelled = 0 "
+                "AND strategy_arm = 'conservative'",
+                order_by="order_placed_time ASC",
             )
         )
         return [_from_row(row) for row in rows]

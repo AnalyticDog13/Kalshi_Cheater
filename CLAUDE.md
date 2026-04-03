@@ -6,6 +6,40 @@
 
 ---
 
+## CHANGES (session 14 — 2026-04-03)
+*API data integrity overhaul. All Kalshi values now read from the API rather than assumed. Critical fill-sync no-op bug fixed. 529/529 tests passing.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| CRITICAL FIX | `src/daemon.py` `_sync_fills()` + `src/tracker.py` | `_sync_fills()` called `get_open_positions()` (SQL: `order_filled_time IS NOT NULL`) then filtered for `t.order_filled_time is None` — those two conditions can never both be true. `pending` was always empty, so fills were **never detected** since the function was first written. Fixed by adding `tracker.get_pending_trades()` (SQL: `order_filled_time IS NULL AND order_cancelled=0 AND strategy_arm='conservative'`) and updating `_sync_fills()` to call it instead. Fill sync now actually runs. |
+| NEW | `src/tracker.py` `get_pending_trades()` | New method: returns conservative-arm trades that are placed but not yet filled (`order_filled_time IS NULL`). Distinct from `get_open_positions()` which returns filled-but-unresolved holdings. |
+| FIX | `src/kalshi_client.py` `get_orders()` | Added `status=None` support. Calling with `status=None` fetches ALL orders without a status filter. Used by `_sync_fills()` to get every order and inspect `order.status` directly, avoiding the failure mode where `get_orders(status="filled")` returned 0 because Kalshi uses different status strings (e.g. `"executed"` not `"filled"`). |
+| FIX | `src/daemon.py` `_sync_fills()` | Complete overhaul (separate from no-op fix above). Now makes ONE call with `status=None`, inspects `order.status` on each order directly, matches against broad `FILLED_STATUSES = {"filled","executed","complete","closed"}` and `CANCELLED_STATUSES = {"cancelled","canceled","expired","voided"}`. Added: (1) diagnostic log showing Kalshi order count and status breakdown every cycle; (2) quantity cross-check with WARNING and DB update on mismatch; (3) field dump when fill price extraction fails; (4) pre-fix UUID trades logged at debug level only. |
+| FIX | `src/daemon.py` `_extract_fill_price()` | Added `avg_price` as first-priority field (most reliable for actual execution price, especially on partial fills). Added debug log showing which field was used. Previously only tried `yes_price`, `no_price`, `yes_bid_dollars`, `no_bid_dollars`, `price`. |
+| NEW | `src/daemon.py` `_extract_fill_time()` | New helper. Tries `updated_time`, `fill_time`, `execution_time`, `close_time`, `placed_time` in priority order. Previously used inline `getattr(order, "close_time") or getattr(order, "updated_time")` which often missed the actual fill time. |
+| NEW | `src/daemon.py` `_extract_filled_quantity()` | New helper. Reads `filled_count`, `filled_count_fp`, `executed_count` first; falls back to `count - remaining_count`; then `count`. Returns `None` if undetermined (caller keeps DB value). |
+| NEW | `src/daemon.py` `_order_field_summary()` | New debug helper. Dumps all non-None fields from a Kalshi order object via `model_dump()` or `__dict__`. Used in warning logs when fill price extraction fails. |
+| FIX | `src/daemon.py` dedup (`_run_cycle`) | `db_open_tickers` now filters `strategy_arm != "exploratory"`. Previously included exploratory paper trades which could block real order placement on those tickers. |
+| FIX | `src/daemon.py` `_sync_resolutions()` | When resolving a market where `fill_price` is 0.0 or 0.50 (sentinel placeholder from pre-fix orders), logs a WARNING that P&L for that trade is unreliable. |
+| FIX | `src/tracker.py` `update_fill()` | Added optional `filled_quantity` parameter. When provided, overwrites DB `quantity` so partial fills are recorded correctly. Pass `None` to leave unchanged (default). |
+| FIX | `tests/test_order_executor.py` | Fixed stale test `test_buy_yes_empty_book_uses_fair_value_minus_buffer` — expected 0.68 (fair_value - 0.02) but `MAX_CONTRACT_PRICE=0.50` cap (added session 9, test never updated) brings it to 0.50. |
+| NEW | `tests/test_tracker.py` | Added 6 tests for `get_pending_trades()` and 2 tests for `update_fill()` `filled_quantity` parameter. |
+
+**State as of end of session 14:** 529/529 tests passing. Fill sync now works for the first time — `get_pending_trades()` correctly queries unfilled orders, `_sync_fills()` fetches all Kalshi orders and uses `order.status` directly. On first run the log will show `"Status breakdown: {'resting': N, ...}"` revealing the actual Kalshi status strings. If fills still aren't detected after the first run, check that log line and update `FILLED_STATUSES` in `daemon.py` if needed.
+
+## CHANGES (session 13 — 2026-04-03)
+*Kalshi API response unwrapping bugs fixed. Fill tracking and resolution detection now work. Status command fixed. API data integrity overhaul identified as next priority.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| FIX | `src/kalshi_client.py` `get_market()` | `GetMarketResponse` wraps the actual market inside a `.market` attribute (a Pydantic `Market` object). `get_market()` now unwraps and returns the inner object directly so callers can access `.status`, `.result`, `.close_time` etc. via normal attribute access. Previously all these fields returned `None` or `""`. |
+| FIX | `src/kalshi_client.py` `create_order()` | `CreateOrderResponse` wraps the actual order inside a `.order` attribute. `create_order()` now unwraps and returns the inner `Order` object directly so `order.order_id` is accessible. Previously `order_id` was always `None`, causing the daemon to generate a random UUID as the trade_id — making fill sync impossible since Kalshi order IDs never matched DB trade IDs. |
+| FIX | `src/daemon.py` `_sync_resolutions()` | Updated to handle both dict and Pydantic model responses from `get_market()` — falls through to `getattr` branch since the unwrapped inner object is a Pydantic `Market` model. Now correctly reads `status` and `result` fields. |
+| FIX | `src/main.py` `status` command | Same `strategy_arm == "conservative"` bug as was fixed in `_send_daily_summary()` last session. Changed to `strategy_arm != "exploratory"` so older DB records with `strategy_arm=None` are not excluded. |
+| MANUAL DB FIX | `data/trades.db` | Manually marked 3 known real positions as filled (since historical fills are not retrievable from Kalshi API): KXHIGHCHI-26APR04-T62 ×2 records, KXHIGHDEN-26APR04-T61 ×1 record. `order_filled_time` and `fill_price` set to current time and entry_price (0.50 — real fill prices unknown, see NEXT STEPS). |
+
+**State as of end of session 13:** Status command now shows 3 open positions (Chicago T62, Denver T61). `_sync_resolutions()` will correctly detect settled status tomorrow. `create_order()` fix means future orders will store real Kalshi order IDs and fill sync will work automatically going forward. Existing pre-fix DB records have wrong trade_ids (UUIDs) and wrong fill prices (0.50) and cannot be retroactively corrected from the API.
+
 ## CHANGES (session 12 — 2026-04-03)
 *Claude API waste fix, daily summary fix, automatic resolution detection added.*
 
@@ -71,9 +105,9 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-03 (session 12 — Claude API waste fix, daily summary fix, auto resolution detection. Daemon verified stable over 4 cycles. Ready for VPS.). Update this section at the start of every new session.*
+*Last updated: 2026-04-03 (session 14 — API data integrity overhaul complete. _sync_fills() now fetches all orders and reads order.status directly. Fill price, fill time, filled quantity all read from Kalshi. Dedup no longer blocks real orders with exploratory paper trades. Sentinel fill_price warning added. 523/523 tests passing.). Update this section at the start of every new session.*
 
-### Current Status: 521/521 tests passing. LIVE trading active. Dedup working via DB. Auto-resolution detection active. Ready for VPS deployment.
+### Current Status: 529/529 tests passing. LIVE trading active. All Kalshi values (fill price, fill time, filled quantity, cancel status) now read from the API. Critical fill-sync bug fixed (was permanent no-op). VPS deployment is next priority.
 
 ### Live Configuration (current)
 - **Bankroll:** ~$29.77 (live Kalshi account as of session 11)
@@ -89,11 +123,11 @@
 - `src/order_executor.py`: BUY_YES empty-book price capped at $0.50
 - Test count: 521/521
 
-### Open positions as of end of session 12 (2026-04-03 ~11:05am UTC)
-- Denver "60° or below" YES × 2 @ 49¢ — resolves Apr 4
-- Chicago "63° or above" YES × 4 @ 38¢ — resolves Apr 4
-- Chicago "59° or below" NO × 2 @ 52¢ — resolves Apr 3 (likely resolves today)
-- Daemon running. When APR03 markets settle, `_sync_resolutions()` will auto-record outcomes and drop them from dedup.
+### Open positions as of end of session 13 (2026-04-03 ~4pm UTC)
+- Denver YES × 2 (`KXHIGHDEN-26APR04-T61`) — real fill price ~49¢, DB shows 0.50 (wrong, see NEXT STEPS)
+- Chicago YES × 4 (`KXHIGHCHI-26APR04-T62`) — real fill price ~38¢, DB shows 0.50 (wrong, see NEXT STEPS)
+- Chicago APR03 position resolved or will resolve today — `_sync_resolutions()` will auto-record when settled
+- Daemon is STOPPED. Restart with `python -m src.main start --live` when ready.
 
 ### Manual skip list in `src/daemon.py` (clean up after Apr 3 resolves)
 ```python
@@ -109,23 +143,42 @@ _manual_skip: set[str] = {
 ```
 After APR03 markets resolve and the daemon auto-records their outcomes, the APR03 entries in `_manual_skip` are dead weight. Remove them (leave APR04 entries until Apr 4 resolves).
 
-### KNOWN REMAINING ISSUES (as of session 12)
+### KNOWN REMAINING ISSUES (as of session 14)
 - `get_positions()` returns `{'positions': None}` from Kalshi SDK — unfixable, workaround in place via DB dedup.
 - `parse_err=40` per cycle — B-range markets correctly skipped. Cosmetic only.
 - `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — 404 on series endpoint, uses default 0.07. No trading impact.
-- Chicago 63°+ has 4 contracts instead of 2 — due to duplicate fills before dedup fix. Financially minor ($1.52 cost, $4 payout).
-- DB has 136 "open" records from prior sessions (many from LAX/MIA/NY trades that may never have filled or resolved). These will self-clean as `_sync_resolutions()` records outcomes for settled markets.
+- **DB has ~288 ghost records** from pre-fix sessions. Exploratory records (231) are paper-only so prices don't matter. The 3 manually-fixed conservative records have `fill_price=0.50` (wrong — real prices unknown). When these resolve, `_sync_resolutions()` will log a WARNING about unreliable P&L.
+- **`_sync_fills()` matches by `trade.trade_id` against Kalshi `order_id`** — only works for orders placed AFTER the session 13 `create_order()` fix. All pre-fix orders (UUIDs in DB) will get a debug-level log "may be a pre-fix UUID trade" each cycle — cosmetic, not an error.
+- **Actual Kalshi status strings are unverified** — `_sync_fills()` logs status breakdown every cycle. First run will reveal whether Kalshi uses `"filled"` / `"executed"` / something else. If fills still aren't detected, check the log line `"Status breakdown: {...}"` and update `FILLED_STATUSES` / `CANCELLED_STATUSES` in `daemon.py` accordingly.
+- **APR04 entries in `_manual_skip`** still present — clean up after Apr 4 resolves (see Priority 1 below).
 
 ### NEXT STEP (read this first on new session)
-**Daemon is stable and autonomous. Move to VPS for continuous operation.**
 
-1. **Stop the daemon** on your Windows machine: `python -m src.main stop`
-2. **Set up a VPS** (DigitalOcean/Linode/Hetzner, ~$6/month). Ask Claude Code to write the systemd service file when ready.
-3. **Copy the project to VPS**: copy the project folder, `.env`, and `.pem` key file.
-4. **Start on VPS**: `python -m src.main start --live`
-5. After APR03 markets resolve, check the logs for `Auto-resolved KXHIGHCHI-26APR03-T59: result=...` — confirms `_sync_resolutions()` is working.
-6. After APR03 auto-resolves, clean up `_manual_skip` in `src/daemon.py` — remove the APR03 entries (T59, T61 for Denver; T59 for Chicago). Leave APR04 entries until Apr 4 resolves.
-7. Watch that the 20-ticker dedup list shrinks after markets resolve — confirms the auto-resolution is cleaning the DB.
+#### Priority 1 — Clean up APR04 manual skip (after Apr 4 resolves)
+After APR04 markets resolve on the night of Apr 4, remove all entries from `_manual_skip` in `src/daemon.py`. `_sync_resolutions()` handles cleanup automatically once markets settle.
+```python
+_manual_skip: set[str] = {
+    # Remove all entries after APR04 resolves — _sync_resolutions() handles cleanup
+}
+```
+
+#### Priority 2 — Verify fill sync is working on first run after session 14
+On the first daemon run after these changes, look for this log line every cycle:
+```
+_sync_fills: fetched N Kalshi orders. Status breakdown: {'resting': N, ...}. Pending DB trades to match: M
+```
+- If `N > 0`: the API call is working. Check which status strings appear.
+- If a status like `"executed"` appears but fills still aren't syncing: add it to `FILLED_STATUSES` in `daemon.py`.
+- If `N == 0`: `get_orders(status=None)` may require a `status` param after all — try passing `status="open"` and separately checking other status values.
+- Also verify `_extract_fill_price()` debug log: `"_sync_fills: used 'avg_price' = 0.3800"` — confirms which field Kalshi uses.
+
+#### Priority 3 — VPS deployment
+The API data integrity overhaul is now done. Move to VPS:
+1. Stop daemon on Windows: `python -m src.main stop`
+2. Set up VPS (DigitalOcean/Linode/Hetzner ~$6/month)
+3. Copy project, `.env`, `.pem` key
+4. Ask Claude Code to write the systemd service file
+5. Start: `python -m src.main start --live`
 
 ---
 

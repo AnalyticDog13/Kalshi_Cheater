@@ -358,13 +358,21 @@ class KalshiClient:
     # ------------------------------------------------------------------
 
     async def get_market(self, ticker: str) -> Any:
-        """Fetch a single market by ticker."""
-        return await self._call(
+        """
+        Fetch a single market by ticker.
+
+        The SDK returns a GetMarketResponse wrapper; unwrap to the inner market
+        dict so callers can access fields directly (e.g. market['status']).
+        Falls back to the raw response if the inner attribute is absent.
+        """
+        raw = await self._call(
             "get_market",
             cache_key=f"market:{ticker}",
             ttl=self.cache_ttl_market,
             ticker=ticker,
         )
+        inner = getattr(raw, "market", None)
+        return inner if inner is not None else raw
 
     async def get_orderbook(self, ticker: str, depth: int = 10) -> OrderbookSnapshot:
         """
@@ -477,13 +485,27 @@ class KalshiClient:
         )
         return positions
 
-    async def get_orders(self, status: str = "open") -> list[Any]:
-        """Fetch orders filtered by status."""
+    async def get_orders(self, status: str | None = "open") -> list[Any]:
+        """
+        Fetch orders filtered by status.
+
+        Pass status=None to fetch ALL orders regardless of status — useful
+        for _sync_fills() which needs to inspect order.status directly rather
+        than relying on Kalshi using specific status string values (which have
+        varied across SDK versions: "filled" vs "executed", "cancelled" vs
+        "canceled").  When status is None the SDK call is made without the
+        status kwarg so the server applies its own default (typically all
+        non-expired orders).
+        """
+        kwargs: dict[str, Any] = {}
+        if status is not None:
+            kwargs["status"] = status
+        cache_key = f"orders:{status if status is not None else 'all'}"
         response = await self._call(
             "get_orders",
-            cache_key=f"orders:{status}",
+            cache_key=cache_key,
             ttl=self.cache_ttl_portfolio,
-            status=status,
+            **kwargs,
         )
         return getattr(response, "orders", []) or []
 
@@ -533,7 +555,7 @@ class KalshiClient:
             order_type, ticker, side, price, count,
         )
 
-        result = await self._call(
+        raw = await self._call(
             "create_order",
             cache_key=None,
             ttl=0,
@@ -544,7 +566,10 @@ class KalshiClient:
         for key in ("positions", "orders:open", "balance"):
             self._cache.invalidate(key)
 
-        return result
+        # CreateOrderResponse wraps the actual Order inside a .order attribute.
+        # Unwrap so callers can access order_id, status, etc. directly.
+        inner = getattr(raw, "order", None)
+        return inner if inner is not None else raw
 
     async def cancel_order(self, order_id: str) -> Any:
         """Cancel an open order."""

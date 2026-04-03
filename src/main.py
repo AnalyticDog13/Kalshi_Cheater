@@ -203,13 +203,13 @@ def status(db_path: str) -> None:
 
     click.echo(f"\n--- Open Positions ({len(positions)}) ---")
     if positions:
-        header = f"{'Ticker':<32} {'Side':<4} {'Qty':>5} {'Entry':>7} {'Edge':>7} {'City':<15}"
+        header = f"{'Ticker':<32} {'Side':<4} {'Qty':>5} {'Fill':>7} {'Edge':>7} {'City':<15}"
         click.echo(header)
         click.echo("-" * len(header))
         for p in positions:
             click.echo(
                 f"{p.market_ticker:<32} {p.side:<4} {p.quantity:>5.1f} "
-                f"{p.entry_price:>7.4f} {p.edge_at_entry:>7.1%} {p.city:<15}"
+                f"{p.fill_price:>7.4f} {p.edge_at_entry:>7.1%} {p.city:<15}"
             )
     else:
         click.echo("  (none)")

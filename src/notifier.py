@@ -35,6 +35,7 @@ from src.order_executor import OrderResult
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_URL = "https://api.telegram.org/bot{token}/sendMessage"
+TELEGRAM_UPDATES_URL = "https://api.telegram.org/bot{token}/getUpdates"
 REQUEST_TIMEOUT = 10.0  # seconds — don't let a slow Telegram block the loop
 
 
@@ -82,6 +83,8 @@ class Notifier:
 
     def __init__(self, config: NotifierConfig | None = None) -> None:
         self.config = config or NotifierConfig()
+        # Tracks the highest processed update_id so getUpdates only returns new messages
+        self._update_offset: int = 0
 
     @classmethod
     def from_settings(cls, settings: dict) -> "Notifier":
@@ -176,6 +179,71 @@ class Notifier:
             f"Action:  Trading paused for 5 minutes. Will retry automatically."
         )
         await self._send(msg)
+
+    # ------------------------------------------------------------------
+    # Remote command polling
+    # ------------------------------------------------------------------
+
+    async def poll_commands(self) -> list[str]:
+        """
+        Poll Telegram for new incoming commands from the configured chat.
+
+        Uses getUpdates with offset tracking so each update is only returned
+        once. Non-blocking (timeout=0). Security: messages from any chat_id
+        other than the configured one are silently ignored.
+
+        Supported commands: /stop, /pause, /resume
+
+        Returns:
+            List of command strings received since the last poll, e.g. ["/stop"].
+            Returns [] on any error or when not configured.
+
+        Never raises.
+        """
+        if not self.config.is_configured:
+            return []
+
+        try:
+            url = TELEGRAM_UPDATES_URL.format(token=self.config.bot_token)
+            params = {"offset": self._update_offset, "timeout": 0, "limit": 10}
+            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                resp = await client.get(url, params=params)
+                resp.raise_for_status()
+
+            data = resp.json()
+            if not data.get("ok"):
+                logger.warning("getUpdates returned ok=false: %s", data)
+                return []
+
+            commands: list[str] = []
+            for update in data.get("result", []):
+                # Advance offset so this update is not returned again
+                self._update_offset = update["update_id"] + 1
+
+                msg = update.get("message") or update.get("edited_message") or {}
+                sender_chat_id = str(msg.get("chat", {}).get("id", ""))
+
+                # Security: only accept messages from the configured chat
+                if sender_chat_id != str(self.config.chat_id):
+                    logger.debug(
+                        "Ignoring Telegram message from unknown chat_id %s", sender_chat_id
+                    )
+                    continue
+
+                text = (msg.get("text") or "").strip()
+                if text.startswith("/"):
+                    cmd = text.split()[0].lower()
+                    commands.append(cmd)
+                    logger.info("Telegram command received: %s", cmd)
+
+            return commands
+
+        except httpx.TimeoutException:
+            logger.warning("poll_commands timed out after %.0fs", REQUEST_TIMEOUT)
+            return []
+        except Exception as exc:
+            logger.warning("poll_commands failed (%s: %s)", type(exc).__name__, exc)
+            return []
 
     # ------------------------------------------------------------------
     # Internal send

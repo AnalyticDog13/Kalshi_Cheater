@@ -286,6 +286,7 @@ class TradingDaemon:
     async def _run_cycle(self, cycle: int) -> None:
         """
         One full trading cycle:
+          0. Poll Telegram for remote commands (/stop, /pause, /resume)
           1. Cancel stale open orders
           2. Check for fills on pending orders
           3. Fetch portfolio state
@@ -300,6 +301,11 @@ class TradingDaemon:
             cycle,
             now_utc.strftime("%Y-%m-%dT%H:%M:%SZ"),
         )
+
+        # --- 0. Check for remote Telegram commands -----------------------
+        await self._check_telegram_commands()
+        if self._stop_event.is_set():
+            return  # /stop was received — exit cleanly without running cycle
 
         # --- 1. Monitor open orders (cancel stale) -----------------------
         just_cancelled = await self._monitor_orders()
@@ -664,6 +670,50 @@ class TradingDaemon:
                 conservative_result.market_ticker,
                 exc,
             )
+
+    # ------------------------------------------------------------------
+    # Remote command handling
+    # ------------------------------------------------------------------
+
+    async def _check_telegram_commands(self) -> None:
+        """
+        Poll Telegram for remote control commands. Handled commands:
+
+          /stop   — graceful shutdown after current cycle
+          /pause  — write pause flag; daemon scans but skips order execution
+          /resume — remove pause flag; order execution resumes
+
+        Never raises. A poll failure is logged and ignored.
+        """
+        try:
+            commands = await self.notifier.poll_commands()
+        except Exception as exc:
+            logger.warning("_check_telegram_commands poll failed: %s", exc)
+            return
+
+        for cmd in commands:
+            if cmd == "/stop":
+                logger.info("Remote /stop received via Telegram — stopping daemon.")
+                await self.notifier.send_alert(
+                    "Remote /stop command received. Daemon will stop after this cycle."
+                )
+                self._stop_event.set()
+
+            elif cmd == "/pause":
+                logger.info("Remote /pause received via Telegram — setting pause flag.")
+                self._pause_flag.touch()
+                await self.notifier.send_alert(
+                    "Paused: daemon is scanning but will not execute orders.\n"
+                    "Send /resume to re-enable trading."
+                )
+
+            elif cmd == "/resume":
+                logger.info("Remote /resume received via Telegram — clearing pause flag.")
+                self._pause_flag.unlink(missing_ok=True)
+                await self.notifier.send_alert("Resumed: order execution re-enabled.")
+
+            else:
+                logger.debug("Unknown Telegram command ignored: %s", cmd)
 
     # ------------------------------------------------------------------
     # Order monitoring and fill sync

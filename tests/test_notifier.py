@@ -11,7 +11,7 @@ import logging
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.notifier import Notifier, NotifierConfig, TELEGRAM_API_URL
+from src.notifier import Notifier, NotifierConfig, TELEGRAM_API_URL, TELEGRAM_UPDATES_URL
 from src.order_executor import OrderResult
 
 
@@ -386,3 +386,145 @@ class TestMessageContent:
         with caplog.at_level(logging.INFO, logger="src.notifier"):
             _run(n.send_daily_summary(-1.0, 0.20, 7))
         assert "7" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# poll_commands — remote command polling
+# ---------------------------------------------------------------------------
+
+def _mock_updates_client(updates: list[dict], ok: bool = True):
+    """Return a mock httpx.AsyncClient that returns a getUpdates-style response."""
+    mock_resp = MagicMock()
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json = MagicMock(return_value={"ok": ok, "result": updates})
+
+    mock_client = AsyncMock()
+    mock_client.get = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=False)
+    return mock_client
+
+
+def _make_update(update_id: int, chat_id: str, text: str) -> dict:
+    return {
+        "update_id": update_id,
+        "message": {
+            "chat": {"id": int(chat_id)},
+            "text": text,
+        },
+    }
+
+
+class TestPollCommands:
+    def test_log_only_returns_empty(self):
+        n = _log_only_notifier()
+        result = _run(n.poll_commands())
+        assert result == []
+
+    def test_unconfigured_returns_empty(self):
+        n = Notifier(config=NotifierConfig(method="telegram", bot_token="", chat_id=""))
+        result = _run(n.poll_commands())
+        assert result == []
+
+    def test_returns_stop_command(self):
+        n = _telegram_notifier()
+        updates = [_make_update(1, "123456", "/stop")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == ["/stop"]
+
+    def test_returns_pause_command(self):
+        n = _telegram_notifier()
+        updates = [_make_update(1, "123456", "/pause")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == ["/pause"]
+
+    def test_returns_resume_command(self):
+        n = _telegram_notifier()
+        updates = [_make_update(1, "123456", "/resume")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == ["/resume"]
+
+    def test_ignores_wrong_chat_id(self):
+        n = _telegram_notifier()  # configured for chat_id "123456"
+        updates = [_make_update(1, "999999", "/stop")]  # from a different chat
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == []
+
+    def test_ignores_non_command_messages(self):
+        n = _telegram_notifier()
+        updates = [_make_update(1, "123456", "hello there")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == []
+
+    def test_advances_offset_after_poll(self):
+        n = _telegram_notifier()
+        assert n._update_offset == 0
+        updates = [_make_update(42, "123456", "/pause")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            _run(n.poll_commands())
+        assert n._update_offset == 43  # update_id + 1
+
+    def test_empty_result_returns_empty_list(self):
+        n = _telegram_notifier()
+        mock_client = _mock_updates_client([])
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == []
+
+    def test_network_error_returns_empty_not_raises(self):
+        import httpx as _httpx
+        n = _telegram_notifier()
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=_httpx.ConnectError("refused"))
+        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_client.__aexit__ = AsyncMock(return_value=False)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == []
+
+    def test_ok_false_returns_empty(self):
+        n = _telegram_notifier()
+        mock_client = _mock_updates_client([], ok=False)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == []
+
+    def test_multiple_commands_returned(self):
+        n = _telegram_notifier()
+        updates = [
+            _make_update(10, "123456", "/pause"),
+            _make_update(11, "123456", "/resume"),
+        ]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == ["/pause", "/resume"]
+        assert n._update_offset == 12
+
+    def test_command_normalized_to_lowercase(self):
+        n = _telegram_notifier()
+        updates = [_make_update(1, "123456", "/STOP")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            result = _run(n.poll_commands())
+        assert result == ["/stop"]
+
+    def test_offset_advances_even_for_wrong_chat(self):
+        """Even ignored messages must advance the offset so they aren't re-fetched."""
+        n = _telegram_notifier()
+        updates = [_make_update(7, "999999", "/stop")]
+        mock_client = _mock_updates_client(updates)
+        with patch("src.notifier.httpx.AsyncClient", return_value=mock_client):
+            _run(n.poll_commands())
+        assert n._update_offset == 8

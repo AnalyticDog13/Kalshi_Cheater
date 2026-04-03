@@ -302,7 +302,7 @@ class TradingDaemon:
         )
 
         # --- 1. Monitor open orders (cancel stale) -----------------------
-        await self._monitor_orders()
+        just_cancelled = await self._monitor_orders()
 
         # --- 2. Sync fills on pending orders -----------------------------
         await self._sync_fills()
@@ -319,7 +319,9 @@ class TradingDaemon:
             all_kalshi_orders = await self.kalshi_client.get_orders(status=None)
             _RESTING_STATUSES = frozenset({"resting", "open", "pending"})
             open_orders = [o for o in all_kalshi_orders if str(getattr(o, "status", "")).lower() in _RESTING_STATUSES]
-            open_orders_count = len(open_orders)
+            # Subtract orders we just cancelled this cycle — Kalshi's GET endpoint
+            # may not reflect cancellations immediately (eventual consistency lag).
+            open_orders_count = max(0, len(open_orders) - len(just_cancelled))
             open_positions = await self.kalshi_client.get_positions()
             self.health_monitor.record_success("kalshi_api")
         except Exception as exc:
@@ -667,13 +669,14 @@ class TradingDaemon:
     # Order monitoring and fill sync
     # ------------------------------------------------------------------
 
-    async def _monitor_orders(self) -> None:
+    async def _monitor_orders(self) -> list[str]:
         """
         Cancel stale open orders (>10 min old) via OrderExecutor.
         Mark cancelled orders in the tracker and release risk exposure.
+        Returns list of cancelled order IDs (used by caller to adjust open_orders_count).
         """
         if self.health_monitor.is_open("kalshi_api"):
-            return
+            return []
 
         try:
             cancelled_ids = await self.order_executor.monitor_open_orders()
@@ -682,10 +685,12 @@ class TradingDaemon:
             just_tripped = self.health_monitor.record_failure("kalshi_api", str(exc))
             if just_tripped:
                 await self.notifier.send_circuit_breaker("kalshi_api", str(exc))
-            return
+            return []
 
         for order_id in cancelled_ids:
             self._mark_order_cancelled(order_id)
+
+        return cancelled_ids
 
     def _mark_order_cancelled(self, order_id: str) -> None:
         """
@@ -798,6 +803,8 @@ class TradingDaemon:
         FILLED_STATUSES:    frozenset[str] = frozenset({"filled", "executed", "complete", "closed"})
         CANCELLED_STATUSES: frozenset[str] = frozenset({"cancelled", "canceled", "expired", "voided"})
 
+        logged_cancelled: set[str] = set()  # deduplicate cancel log per ticker per cycle
+
         for trade in pending:
             order = kalshi_by_id.get(trade.trade_id)
 
@@ -817,11 +824,13 @@ class TradingDaemon:
 
             if order_status in CANCELLED_STATUSES:
                 self._mark_order_cancelled(trade.trade_id)
-                logger.info(
-                    "Marked cancelled (Kalshi status=%r): %s",
-                    order_status,
-                    trade.market_ticker,
-                )
+                if trade.market_ticker not in logged_cancelled:
+                    logger.info(
+                        "Marked cancelled (Kalshi status=%r): %s",
+                        order_status,
+                        trade.market_ticker,
+                    )
+                    logged_cancelled.add(trade.market_ticker)
                 continue
 
             if order_status not in FILLED_STATUSES:

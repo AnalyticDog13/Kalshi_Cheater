@@ -243,6 +243,13 @@ class TradingDaemon:
         logger.info("TradingDaemon starting.")
         await self.notifier.send_alert("Trading daemon started.")
 
+        # Drain any Telegram commands that arrived before this session started.
+        # Without this, a /stop sent while the daemon was offline would immediately
+        # kill the newly-started process.
+        stale = await self.notifier.poll_commands()
+        if stale:
+            logger.info("Discarded %d stale Telegram command(s) from before startup: %s", len(stale), stale)
+
         # Sync positions from Kalshi API (source of truth) before first cycle
         await self._reconcile_positions()
 

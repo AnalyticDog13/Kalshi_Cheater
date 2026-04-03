@@ -583,10 +583,33 @@ class MarketScanner:
         return 0.07
 
     def _compute_spread(self, market: Any) -> float:
-        """Compute bid-ask spread in dollars from a market object."""
+        """
+        Compute bid-ask spread in dollars from a market object.
+
+        On thin Kalshi weather markets the ask side is often absent (no one
+        is actively selling YES contracts).  In that case, the YES ask can be
+        approximated as (1 - best NO bid) from the NO side.  If neither side
+        has a counteroffer present, we return 0.0 so the spread filter does
+        not block an otherwise liquid market — the volume check is the right
+        guard in that situation.
+        """
         bid = parse_price(getattr(market, "yes_bid_dollars", None), default=0.0)
-        ask = parse_price(getattr(market, "yes_ask_dollars", None), default=1.0)
-        return ask - bid
+
+        yes_ask_raw = getattr(market, "yes_ask_dollars", None)
+        yes_ask = parse_price(yes_ask_raw, default=0.0) if yes_ask_raw is not None else 0.0
+
+        if yes_ask > 0.0:
+            return max(0.0, yes_ask - bid)
+
+        # YES ask missing — try to infer from NO bid (YES ask ≈ 1 - NO bid)
+        no_bid_raw = getattr(market, "no_bid_dollars", None)
+        no_bid = parse_price(no_bid_raw, default=0.0) if no_bid_raw is not None else 0.0
+        if no_bid > 0.0:
+            implied_ask = 1.0 - no_bid
+            return max(0.0, implied_ask - bid)
+
+        # Both sides absent — spread is undefined; pass volume filter only
+        return 0.0
 
     def _passes_liquidity_filter(self, market: Any) -> bool:
         """True if market meets minimum volume and maximum spread requirements."""

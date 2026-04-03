@@ -6,6 +6,19 @@
 
 ---
 
+## CHANGES (session 16 — 2026-04-03)
+*Stale order cancellation bug fixed. Order cap now immediately reflects cancellations. Cancel log deduped.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| CRITICAL FIX | `src/order_executor.py` `monitor_open_orders()` | Same Kalshi status string bug as session 15 dedup fix. Was calling `get_orders(status="open")` which returns 0 — Kalshi uses `"resting"`. Fix: fetch all orders with `status=None`, filter to resting statuses. Without this, stale orders were never auto-cancelled, order cap stayed permanently at 5/5, and no new orders could ever be placed. |
+| FIX | `tests/test_order_executor.py` | Added `order.status = "resting"` to `_mock_open_order()` helper and `test_order_with_string_created_time` so stale-cancel tests pass with the new status filter. |
+| FIX | `src/daemon.py` `_monitor_orders()` | Changed return type from `None` to `list[str]` — now returns the list of cancelled order IDs so `_run_cycle()` can use it. |
+| FIX | `src/daemon.py` `_run_cycle()` | `open_orders_count` now subtracts `len(just_cancelled)` (orders cancelled this cycle by `_monitor_orders`). Kalshi's GET endpoint has eventual-consistency lag — cancelled orders may still appear as `"resting"` for several seconds after cancellation. Without this, the order cap stayed at 5/5 for the entire cycle even after stale orders were cancelled, blocking new trades until the next cycle. |
+| FIX | `src/daemon.py` `_sync_fills()` | Added `logged_cancelled: set[str]` to deduplicate "Marked cancelled" log per ticker per cycle. Ghost records cause the same ticker to be re-processed every cycle (multiple DB records per ticker from pre-fix duplicate order sessions). Now each ticker logs at most once per cycle regardless of ghost record count. |
+
+**State as of end of session 16:** 529/529 tests passing. Stale cancellation now fully working — verified live: 5 orders cancelled (64 min old) in first cycle after restart. Order cap immediately freed (subtraction fix). Cancel log noise eliminated. All three fixes working together: stale cancel → immediate cap relief → no duplicate new orders.
+
 ## CHANGES (session 15 — 2026-04-03)
 *Fill dedup bug fixed (resting orders not counted). AI date bug fixed. DB corrected with real fill prices. Missing position inserted.*
 
@@ -119,9 +132,9 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-03 (session 14 — API data integrity overhaul complete. _sync_fills() now fetches all orders and reads order.status directly. Fill price, fill time, filled quantity all read from Kalshi. Dedup no longer blocks real orders with exploratory paper trades. Sentinel fill_price warning added. 523/523 tests passing.). Update this section at the start of every new session.*
+*Last updated: 2026-04-03 (session 16 — Stale order cancellation fixed. Order cap now immediately reflects stale cancellations. Cancel log deduped. 529/529 tests passing.). Update this section at the start of every new session.*
 
-### Current Status: 529/529 tests passing. LIVE trading active. Daemon running, no duplicate orders. Fill sync working (Kalshi uses "executed"/"resting"/"canceled"). APR03 markets resolving tonight. VPS deployment is next priority.
+### Current Status: 529/529 tests passing. LIVE trading active. Stale order cancellation working. Order cap correctly freed after cancellations. APR03 markets resolving tonight, APR04 tomorrow. VPS deployment is next priority.
 
 ### Live Configuration (current)
 - **Bankroll:** ~$29.77 (live Kalshi account as of session 11)
@@ -137,11 +150,11 @@
 - `src/order_executor.py`: BUY_YES empty-book price capped at $0.50
 - Test count: 521/521
 
-### Open positions as of end of session 15 (2026-04-03 ~1pm ET)
-- Chicago NO × 2 (`KXHIGHCHI-26APR03-T59`) — fill_price=0.52 (real, manually inserted)  — resolves tonight
-- Chicago YES × 4 (`KXHIGHCHI-26APR04-T62`, 2 DB records × 2 qty) — fill_price=0.38 (real, manually corrected) — resolves Apr 4
-- Denver YES × 2 (`KXHIGHDEN-26APR04-T61`) — fill_price=0.49 (real, manually corrected) — resolves Apr 4
-- 5 resting limit orders on Kalshi book (KXHIGHCHI-T55, KXHIGHCHI-APR03-T67, KXHIGHCHI-APR03-T60, KXHIGHMIA-APR03-T85, KXHIGHMIA-APR03-T78) — placed with real order IDs, fill sync will auto-detect
+### Open positions as of end of session 16 (2026-04-03 ~2pm ET)
+- Chicago NO × 2 (`KXHIGHCHI-26APR03-T59`) — fill_price=0.52 — resolves tonight
+- Chicago YES × 4 (`KXHIGHCHI-26APR04-T62`, 2 DB records × 2 qty) — fill_price=0.38 — resolves Apr 4
+- Denver YES × 2 (`KXHIGHDEN-26APR04-T61`) — fill_price=0.49 — resolves Apr 4
+- 5 previously-resting orders (T55, T67, T60, T85, T78) — auto-cancelled as stale in session 16 cycle 1. Order cap now at 0, daemon will place new orders next cycle.
 - Daemon is RUNNING.
 
 ### Manual skip list in `src/daemon.py` (clean up after Apr 3 resolves)
@@ -158,18 +171,21 @@ _manual_skip: set[str] = {
 ```
 After APR03 markets resolve and the daemon auto-records their outcomes, the APR03 entries in `_manual_skip` are dead weight. Remove them (leave APR04 entries until Apr 4 resolves).
 
-### KNOWN REMAINING ISSUES (as of session 15)
+### KNOWN REMAINING ISSUES (as of session 16)
 - `get_positions()` returns `{'positions': None}` from Kalshi SDK — unfixable, workaround in place via DB dedup.
 - `parse_err=40` per cycle — B-range markets correctly skipped. Cosmetic only.
 - `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — 404 on series endpoint, uses default 0.07. No trading impact.
-- **DB has ~269 ghost records** from pre-fix sessions. Exploratory records are paper-only. The 4 real pre-fix conservative records now have correct fill prices (manually corrected session 15).
-- **`_sync_fills()` matches by `trade.trade_id` against Kalshi `order_id`** — only works for orders placed AFTER the session 13 `create_order()` fix. Pre-fix UUID trades get a debug-level log each cycle — cosmetic, not an error.
+- **DB has ~489 ghost records** from pre-fix sessions. Only block old APR03/APR04 tickers which resolve tonight/tomorrow — new APR05+ tickers are unaffected.
+- **`_sync_fills()` matches by `trade.trade_id` against Kalshi `order_id`** — only works for orders placed AFTER the session 13 `create_order()` fix. Pre-fix UUID trades get a debug-level log — cosmetic, not an error.
 - **APR04 entries in `_manual_skip`** still present — clean up after Apr 4 resolves.
 - **Kalshi status strings confirmed:** `"resting"` = pending on book, `"executed"` = filled, `"canceled"` = cancelled. All handled correctly.
 
 ### NEXT STEP (read this first on new session)
 
-#### Priority 1 — Clean up manual skip after APR04 resolves (night of Apr 4)
+#### Priority 1 — Confirm new orders placed after session 16 restart
+After restart with stale-cancel fix, order cap was freed. Next cycle (cycle 2) should show new orders placed on unblocked tickers. Look for `[TRADE PLACED]` in logs or Telegram. If no new orders after 2 cycles, paste cycle 2 log.
+
+#### Priority 2 — Clean up manual skip after APR04 resolves (night of Apr 4)
 Remove all entries from `_manual_skip` in `src/daemon.py`. `_sync_resolutions()` handles cleanup automatically.
 ```python
 _manual_skip: set[str] = {
@@ -177,14 +193,13 @@ _manual_skip: set[str] = {
 }
 ```
 
-#### Priority 2 — Monitor fill detection on new orders
-The 5 resting orders placed this session have real Kalshi order IDs. Next time one fills, `_sync_fills()` should auto-detect it and log:
+#### Priority 3 — Monitor fill detection on new orders
+New orders placed post-session-16 have real Kalshi order IDs. When one fills, `_sync_fills()` should log:
 ```
 Marked filled (Kalshi status='executed'): KXHIGH...
 ```
-If fills are not being detected after a market executes, paste the `_sync_fills` log line and check whether the order ID in the DB matches the Kalshi order ID.
 
-#### Priority 3 — VPS deployment
+#### Priority 4 — VPS deployment
 1. Stop daemon: `python -m src.main stop`
 2. Set up VPS (DigitalOcean/Linode/Hetzner ~$6/month)
 3. Copy project, `.env`, `.pem` key

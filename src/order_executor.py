@@ -255,7 +255,9 @@ class OrderExecutor:
             - Individual cancel failures are logged but do not interrupt the
               loop — we still try to cancel all other stale orders.
         """
-        orders = await self.client.get_orders(status="open")
+        _RESTING_STATUSES = frozenset({"resting", "open", "pending"})
+        all_orders = await self.client.get_orders(status=None)
+        orders = [o for o in all_orders if str(getattr(o, "status", "")).lower() in _RESTING_STATUSES]
         cancelled: list[str] = []
         now = datetime.now(timezone.utc)
 

@@ -116,6 +116,7 @@ def _mock_open_order(order_id: str, age_minutes: float) -> MagicMock:
     """Build a mock open order with a specific age."""
     order = MagicMock()
     order.order_id = order_id
+    order.status = "resting"
     created = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
     order.created_time = created
     return order
@@ -539,6 +540,7 @@ class TestMonitorOpenOrders:
         executor, client = _make_executor()
         order = MagicMock()
         order.order_id = "ord-str"
+        order.status = "resting"
         # 15 minutes ago
         old_time = datetime.now(timezone.utc) - timedelta(minutes=15)
         order.created_time = old_time.isoformat()

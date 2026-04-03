@@ -316,7 +316,9 @@ class TradingDaemon:
             return
 
         try:
-            open_orders = await self.kalshi_client.get_orders(status="open")
+            all_kalshi_orders = await self.kalshi_client.get_orders(status=None)
+            _RESTING_STATUSES = frozenset({"resting", "open", "pending"})
+            open_orders = [o for o in all_kalshi_orders if str(getattr(o, "status", "")).lower() in _RESTING_STATUSES]
             open_orders_count = len(open_orders)
             open_positions = await self.kalshi_client.get_positions()
             self.health_monitor.record_success("kalshi_api")
@@ -363,6 +365,9 @@ class TradingDaemon:
             t.market_ticker
             for t in self.tracker.get_open_positions()
             if t.strategy_arm != "exploratory"
+        } | {
+            t.market_ticker
+            for t in self.tracker.get_pending_trades()
         }
         if db_open_tickers:
             logger.info("DB open positions (dedup): %s", sorted(db_open_tickers))

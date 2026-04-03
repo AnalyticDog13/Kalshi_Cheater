@@ -307,6 +307,9 @@ class TradingDaemon:
         # --- 2. Sync fills on pending orders -----------------------------
         await self._sync_fills()
 
+        # --- 2b. Sync resolutions — record outcome for settled markets ---
+        await self._sync_resolutions()
+
         # --- 3. Fetch portfolio state ------------------------------------
         if self.health_monitor.is_open("kalshi_api"):
             logger.warning("kalshi_api circuit OPEN — skipping cycle.")
@@ -814,6 +817,89 @@ class TradingDaemon:
                 )
 
     # ------------------------------------------------------------------
+    # Resolution sync — auto-record outcomes for settled markets
+    # ------------------------------------------------------------------
+
+    async def _sync_resolutions(self) -> None:
+        """
+        Check if any open DB positions have settled on Kalshi, and if so,
+        record the outcome automatically so they drop off the dedup list.
+
+        Runs every cycle. For each unique ticker in open positions, fetches
+        the market from Kalshi and checks if status is "settled". If it is,
+        reads the result ("yes"/"no") and calls tracker.record_outcome().
+
+        This means you never need to manually run any command after a market
+        resolves — the daemon cleans up the DB and dedup list on its own.
+        """
+        if self.health_monitor.is_open("kalshi_api"):
+            return
+
+        try:
+            open_positions = self.tracker.get_open_positions()
+        except Exception as exc:
+            logger.warning("Could not query open positions for resolution sync: %s", exc)
+            return
+
+        # Only check filled positions (order_filled_time set) — unfilled orders
+        # can't have a resolution outcome that matters to us.
+        filled = [p for p in open_positions if p.order_filled_time is not None]
+        if not filled:
+            return
+
+        # Deduplicate — one Kalshi API call per unique ticker
+        unique_tickers: set[str] = {p.market_ticker for p in filled}
+
+        for ticker in unique_tickers:
+            try:
+                market = await self.kalshi_client.get_market(ticker)
+            except Exception as exc:
+                logger.debug("Could not fetch market %s for resolution check: %s", ticker, exc)
+                continue
+
+            status = getattr(market, "status", "") or ""
+            if status != "settled":
+                continue
+
+            # Market has settled — extract result
+            result = getattr(market, "result", None) or ""
+            if result not in ("yes", "no"):
+                logger.warning(
+                    "Settled market %s has unexpected result=%r — skipping auto-record",
+                    ticker, result,
+                )
+                continue
+
+            actual_outcome = 1 if result == "yes" else 0
+
+            # Use market close_time as the resolution timestamp
+            resolution_time = _parse_datetime(
+                getattr(market, "close_time", None)
+            ) or datetime.now(timezone.utc)
+
+            try:
+                self.tracker.record_outcome(
+                    market_ticker=ticker,
+                    actual_outcome=actual_outcome,
+                    actual_max_temp_f=None,   # NOAA fetch not implemented here; None is fine
+                    resolution_time=resolution_time,
+                )
+                logger.info(
+                    "Auto-resolved %s: result=%s (outcome=%d)",
+                    ticker, result.upper(), actual_outcome,
+                )
+                # Release exposure in risk manager for the settled position
+                settled_trades = [p for p in filled if p.market_ticker == ticker]
+                for trade in settled_trades:
+                    exposure = trade.fill_price * trade.quantity
+                    self.conservative_risk.record_position_closed(
+                        dollars=exposure,
+                        pnl=0.0,   # actual P&L is computed inside record_outcome
+                    )
+            except Exception as exc:
+                logger.warning("Failed to auto-record outcome for %s: %s", ticker, exc)
+
+    # ------------------------------------------------------------------
     # Position reconciliation (startup)
     # ------------------------------------------------------------------
 
@@ -907,8 +993,11 @@ class TradingDaemon:
 
             brier = self.tracker.compute_brier_score(n_recent=50)
             open_positions = self.tracker.get_open_positions()
+            # Include any filled position that isn't explicitly the paper-only
+            # exploratory arm. Records from earlier sessions may have strategy_arm
+            # as None/"" rather than "conservative" — they are still real positions.
             conservative_open = [
-                p for p in open_positions if p.strategy_arm == "conservative"
+                p for p in open_positions if p.strategy_arm != "exploratory"
             ]
 
             await self.notifier.send_daily_summary(

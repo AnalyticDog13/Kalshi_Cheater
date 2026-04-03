@@ -197,9 +197,9 @@ def status(db_path: str) -> None:
 
     tracker = Tracker(db_path=db_path)
 
-    # Open positions (conservative arm only — those are real fills)
+    # Open positions (real fills only — exclude exploratory paper trades)
     all_open = tracker.get_open_positions()
-    positions = [p for p in all_open if p.strategy_arm == "conservative"]
+    positions = [p for p in all_open if p.strategy_arm != "exploratory"]
 
     click.echo(f"\n--- Open Positions ({len(positions)}) ---")
     if positions:

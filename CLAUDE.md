@@ -6,6 +6,18 @@
 
 ---
 
+## CHANGES (session 12 — 2026-04-03)
+*Claude API waste fix, daily summary fix, automatic resolution detection added.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| FIX | `src/market_scanner.py` | Added `skip_tickers` param to `scan()` and `_scan_series()`. Claude API calls now suppressed for any ticker already in the dedup/manual-skip set — no wasted credits on trades that will be blocked anyway. |
+| FIX | `src/daemon.py` | Moved `open_order_tickers` / `_manual_skip` / `db_open_tickers` assembly to BEFORE `scan()` call, then passes `skip_tickers=open_order_tickers` into scanner. Previously the skip set was built after scan, so Claude could fire on already-blocked tickers. |
+| FIX | `src/daemon.py` `_send_daily_summary()` | Fixed "Open positions: 0" in daily summary. Changed filter from `strategy_arm == "conservative"` to `strategy_arm != "exploratory"` — older DB records have `strategy_arm=None` and were being excluded. |
+| NEW | `src/daemon.py` `_sync_resolutions()` | Added automatic outcome recording. Every cycle, checks if any filled open position has `status="settled"` on Kalshi. If so, reads `result` ("yes"/"no"), calls `tracker.record_outcome()`, and releases exposure. Tickers drop off the dedup list automatically — no manual command needed after markets resolve. |
+
+**Confirmed working (4 cycles observed):** No Python errors. Dedup stable at 20 tickers. Zero new orders placed (all approved trades already held). Zero Claude API calls. Ensemble cache working (cycle 1: 22s, cycles 2-4: ~2s). Ready for VPS.
+
 ## BUGS FIXED (session 11 — 2026-04-03)
 *Deduplication, order cap, and fill sync bugs fixed. Daemon now stable.*
 
@@ -59,9 +71,9 @@
 ---
 
 ## BUILD PROGRESS LOG
-*Last updated: 2026-04-02 (session 9 — First live trading session. Fixed 7 runtime bugs. Daemon now placing real orders correctly.). Update this section at the start of every new session.*
+*Last updated: 2026-04-03 (session 12 — Claude API waste fix, daily summary fix, auto resolution detection. Daemon verified stable over 4 cycles. Ready for VPS.). Update this section at the start of every new session.*
 
-### Current Status: 521/521 tests passing. LIVE trading active. Dedup working via DB. Daemon stable — safe to run unattended.
+### Current Status: 521/521 tests passing. LIVE trading active. Dedup working via DB. Auto-resolution detection active. Ready for VPS deployment.
 
 ### Live Configuration (current)
 - **Bankroll:** ~$29.77 (live Kalshi account as of session 11)
@@ -71,18 +83,19 @@
   `max_contract_price_dollars: 0.50` (hard cap — Check 12 in risk manager),
   `min_volume_fp: 0` (Kalshi weather markets open at zero volume)
 - `src/risk_manager.py`: 12-point pre-trade checklist; Check 11 accepts `"active"` or `"open"`
-- `src/daemon.py`: dedup uses DB `tracker.get_open_positions()` + Kalshi open orders + manual skip set. `placed_this_cycle` counter enforces `max_open_orders` cap within a cycle. `_sync_fills()` now also fetches cancelled orders and marks them in DB.
+- `src/daemon.py`: dedup uses DB `tracker.get_open_positions()` + Kalshi open orders + manual skip set. `placed_this_cycle` counter enforces `max_open_orders` cap within a cycle. `_sync_fills()` fetches both filled and cancelled orders. `_sync_resolutions()` auto-records outcomes for settled markets each cycle.
+- `src/market_scanner.py`: Claude API calls suppressed for tickers in `skip_tickers` (dedup/manual-skip set), preventing wasted credits on blocked trades.
 - `src/kalshi_client.py`: `get_positions()` returns empty (Kalshi SDK bug — `positions=None`). Workaround: DB dedup. WARNING log still present for diagnostics.
 - `src/order_executor.py`: BUY_YES empty-book price capped at $0.50
 - Test count: 521/521
 
-### Open positions as of end of session 11 (2026-04-03 ~10:45am UTC)
+### Open positions as of end of session 12 (2026-04-03 ~11:05am UTC)
 - Denver "60° or below" YES × 2 @ 49¢ — resolves Apr 4
-- Chicago "63° or above" YES × 4 @ 38¢ — resolves Apr 4 (4 contracts due to duplicate fills before dedup fix)
+- Chicago "63° or above" YES × 4 @ 38¢ — resolves Apr 4
 - Chicago "59° or below" NO × 2 @ 52¢ — resolves Apr 3 (likely resolves today)
-- Daemon running with DB dedup active. Cancelled orders will be cleaned from DB next cycle.
+- Daemon running. When APR03 markets settle, `_sync_resolutions()` will auto-record outcomes and drop them from dedup.
 
-### Manual skip list in `src/daemon.py` (remove when markets resolve)
+### Manual skip list in `src/daemon.py` (clean up after Apr 3 resolves)
 ```python
 _manual_skip: set[str] = {
     "KXHIGHDEN-26APR03-T59",  # sold manually
@@ -94,23 +107,25 @@ _manual_skip: set[str] = {
     "KXHIGHDEN-26APR04-T61",  # safety net
 }
 ```
-Clean these out after Apr 3 markets resolve — they'll be gone from the DB and no longer needed.
+After APR03 markets resolve and the daemon auto-records their outcomes, the APR03 entries in `_manual_skip` are dead weight. Remove them (leave APR04 entries until Apr 4 resolves).
 
-### KNOWN REMAINING ISSUES (as of session 11)
+### KNOWN REMAINING ISSUES (as of session 12)
 - `get_positions()` returns `{'positions': None}` from Kalshi SDK — unfixable, workaround in place via DB dedup.
 - `parse_err=40` per cycle — B-range markets correctly skipped. Cosmetic only.
 - `Could not fetch fee coefficient for KXHIGHDC/PHX/SEA/ATL` — 404 on series endpoint, uses default 0.07. No trading impact.
-- AI thinks dates are "over a year away" — training cutoff before April 2026. Still returns `proceed=True`, no functional impact.
 - Chicago 63°+ has 4 contracts instead of 2 — due to duplicate fills before dedup fix. Financially minor ($1.52 cost, $4 payout).
+- DB has 136 "open" records from prior sessions (many from LAX/MIA/NY trades that may never have filled or resolved). These will self-clean as `_sync_resolutions()` records outcomes for settled markets.
 
 ### NEXT STEP (read this first on new session)
-**Daemon is stable. Safe to let run unattended. Check on it once per day.**
+**Daemon is stable and autonomous. Move to VPS for continuous operation.**
 
-1. Check Kalshi portfolio — see how Apr 3 markets resolved. Note P&L.
-2. After Apr 3 markets resolve, clean up the `_manual_skip` set in `src/daemon.py` — remove the APR03 entries.
-3. Watch cycle 2 log — look for `Marked cancelled (synced from Kalshi):` lines — confirms the fill sync is cleaning up cancelled orders from the DB.
-4. If daemon placed duplicate orders on the same ticker in cycle 2, paste the output to Claude Code immediately.
-5. Once Apr 3 resolves and DB is clean, the system should run fully autonomously — 5 orders max per cycle, no duplicates.
+1. **Stop the daemon** on your Windows machine: `python -m src.main stop`
+2. **Set up a VPS** (DigitalOcean/Linode/Hetzner, ~$6/month). Ask Claude Code to write the systemd service file when ready.
+3. **Copy the project to VPS**: copy the project folder, `.env`, and `.pem` key file.
+4. **Start on VPS**: `python -m src.main start --live`
+5. After APR03 markets resolve, check the logs for `Auto-resolved KXHIGHCHI-26APR03-T59: result=...` — confirms `_sync_resolutions()` is working.
+6. After APR03 auto-resolves, clean up `_manual_skip` in `src/daemon.py` — remove the APR03 entries (T59, T61 for Denver; T59 for Chicago). Leave APR04 entries until Apr 4 resolves.
+7. Watch that the 20-ticker dedup list shrinks after markets resolve — confirms the auto-resolution is cleaning the DB.
 
 ---
 

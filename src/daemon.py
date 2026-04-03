@@ -288,10 +288,11 @@ class TradingDaemon:
         One full trading cycle:
           1. Cancel stale open orders
           2. Check for fills on pending orders
-          3. Scan markets
-          4. Execute approved trades (conservative arm)
-          5. Log exploratory arm assessments for every evaluated market
-          6. Send daily summary if UTC day just rolled over
+          3. Fetch portfolio state
+          4. Build skip set (dedup + manual skip) — before scan to suppress AI calls
+          5. Scan markets (AI calls suppressed for skip-set tickers)
+          6. Execute approved trades (conservative arm)
+          7. Send daily summary if UTC day just rolled over
         """
         now_utc = datetime.now(timezone.utc)
         logger.info(
@@ -333,7 +334,41 @@ class TradingDaemon:
             )
             portfolio_balance = 30.0
 
-        # --- 4. Market scan ----------------------------------------------
+        # --- 4. Build skip set (before scan so AI calls are suppressed for blocked tickers) ---
+        # Build set of tickers that already have an open order OR an existing position.
+        # Skip both — don't re-order a market we already bet on this cycle.
+        def _ticker(obj: Any) -> str | None:
+            return getattr(obj, "ticker", None) or getattr(obj, "market_ticker", None)
+
+        # Manually excluded tickers — positions sold/closed manually outside the daemon.
+        # Remove entries once the market has resolved.
+        _manual_skip: set[str] = {
+            "KXHIGHDEN-26APR03-T59",  # Denver 59F sold manually 2026-04-03
+            "KXHIGHDEN-26APR03-T58",  # Denver 58F sold manually 2026-04-03
+            "KXHIGHCHI-26APR04-T62",  # Chicago tomorrow 63F+ already filled 2026-04-03
+            "KXHIGHDEN-26APR03-T61",  # Denver 60F or below already filled 2026-04-03
+            "KXHIGHCHI-26APR03-T59",  # Chicago today 59F or below already filled 2026-04-03
+            "KXHIGHDEN-26APR04-T60",  # Denver tomorrow 60F or below already filled 2026-04-03
+            "KXHIGHDEN-26APR04-T61",  # Denver tomorrow 60F or below (alt ticker) 2026-04-03
+        }
+
+        # Pull filled-but-unresolved positions from local DB — persists across restarts.
+        # This is the reliable source of truth since get_positions() returns None from Kalshi.
+        db_open_tickers: set[str] = {
+            t.market_ticker
+            for t in self.tracker.get_open_positions()
+        }
+        if db_open_tickers:
+            logger.info("DB open positions (dedup): %s", sorted(db_open_tickers))
+
+        open_order_tickers: set[str] = (
+            {_ticker(o) for o in open_orders}
+            | {_ticker(p) for p in open_positions}
+            | db_open_tickers
+            | _manual_skip
+        ) - {None}
+
+        # --- 5. Market scan ----------------------------------------------
         if self.health_monitor.is_open("open_meteo"):
             logger.warning("open_meteo circuit OPEN — skipping scan.")
             return
@@ -344,6 +379,7 @@ class TradingDaemon:
                 portfolio_balance=portfolio_balance,
                 open_orders_count=open_orders_count,
                 risk_manager=self.conservative_risk,
+                skip_tickers=open_order_tickers,
             )
             self.health_monitor.record_success("open_meteo")
             self.health_monitor.record_success("kalshi_api")
@@ -361,31 +397,13 @@ class TradingDaemon:
             scan_summary.scan_duration_seconds,
         )
 
-        # --- 5. Execute + log exploratory --------------------------------
+        # --- 6. Execute approved trades + log exploratory arm ---------------
         paused = self._pause_flag.exists()
         if paused:
             logger.info(
                 "Daemon is PAUSED (flag: %s). Scan complete; skipping order execution.",
                 self._pause_flag,
             )
-
-        # Build set of tickers that already have an open order OR an existing position.
-        # Skip both — don't re-order a market we already bet on this cycle.
-        def _ticker(obj: Any) -> str | None:
-            return getattr(obj, "ticker", None) or getattr(obj, "market_ticker", None)
-
-        # Manually excluded tickers — positions sold/closed manually outside the daemon.
-        # Remove entries once the market has resolved.
-        _manual_skip: set[str] = {
-            "KXHIGHDEN-26APR03-T59",  # Denver 59F sold manually 2026-04-03
-            "KXHIGHDEN-26APR03-T58",  # Denver 58F sold manually 2026-04-03
-        }
-
-        open_order_tickers: set[str] = (
-            {_ticker(o) for o in open_orders}
-            | {_ticker(p) for p in open_positions}
-            | _manual_skip
-        ) - {None}
 
         placed_this_cycle = 0
         max_orders = self.conservative_risk.limits.max_open_orders
@@ -414,7 +432,7 @@ class TradingDaemon:
                 await self._execute_trade(result)
                 placed_this_cycle += 1
 
-        # --- 6. Daily summary + file reports -----------------------------
+        # --- 7. Daily summary + file reports -----------------------------
         today_utc = now_utc.date()
         if self._last_summary_date is None or today_utc > self._last_summary_date:
             await self._send_daily_summary()
@@ -726,6 +744,7 @@ class TradingDaemon:
 
         try:
             filled_orders = await self.kalshi_client.get_orders(status="filled")
+            cancelled_orders = await self.kalshi_client.get_orders(status="cancelled")
             self.health_monitor.record_success("kalshi_api")
         except Exception as exc:
             just_tripped = self.health_monitor.record_failure("kalshi_api", str(exc))
@@ -733,7 +752,7 @@ class TradingDaemon:
                 await self.notifier.send_circuit_breaker("kalshi_api", str(exc))
             return
 
-        # Build lookup by order_id
+        # Build lookup by order_id for filled orders
         filled_by_id: dict[str, Any] = {}
         for order in filled_orders:
             oid = (
@@ -743,7 +762,23 @@ class TradingDaemon:
             if oid:
                 filled_by_id[oid] = order
 
+        # Build set of cancelled order IDs from Kalshi
+        cancelled_ids_from_kalshi: set[str] = set()
+        for order in cancelled_orders:
+            oid = (
+                getattr(order, "order_id", None)
+                or getattr(order, "id", None)
+            )
+            if oid:
+                cancelled_ids_from_kalshi.add(str(oid))
+
         for trade in pending:
+            # Mark as cancelled if Kalshi says it was cancelled
+            if trade.trade_id in cancelled_ids_from_kalshi:
+                self._mark_order_cancelled(trade.trade_id)
+                logger.info("Marked cancelled (synced from Kalshi): %s", trade.market_ticker)
+                continue
+
             order = filled_by_id.get(trade.trade_id)
             if order is None:
                 continue  # Not yet filled — will check next cycle

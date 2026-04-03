@@ -322,6 +322,7 @@ class MarketScanner:
         portfolio_balance: float,
         open_orders_count: int,
         risk_manager: RiskManager,
+        skip_tickers: set[str] | None = None,
     ) -> tuple[list[ScanResult], ScanSummary]:
         """
         Run one full scan cycle.
@@ -334,6 +335,10 @@ class MarketScanner:
             portfolio_balance:  Current available balance for Kelly sizing
             open_orders_count:  Number of currently open orders (for risk check 11)
             risk_manager:       Stateful RiskManager (tracks exposure and daily P&L)
+            skip_tickers:       Set of market tickers to skip AI sanity checks for.
+                                These are tickers the daemon already knows it won't
+                                trade (dedup, manual skip, etc.) — no point spending
+                                Claude API budget on them.
 
         Returns:
             (results, summary) — results contains ALL evaluated markets (approved
@@ -350,6 +355,7 @@ class MarketScanner:
                 open_orders_count=open_orders_count,
                 risk_manager=risk_manager,
                 summary=summary,
+                skip_tickers=skip_tickers,
             )
             all_results.extend(series_results)
 
@@ -370,6 +376,7 @@ class MarketScanner:
         open_orders_count: int,
         risk_manager: RiskManager,
         summary: ScanSummary,
+        skip_tickers: set[str] | None = None,
     ) -> list[ScanResult]:
         """Scan all markets for one series ticker. Returns ScanResults."""
         # 1. Get fee coefficient for this series (cached 10 min in KalshiClient)
@@ -511,11 +518,13 @@ class MarketScanner:
             )
 
             # AI SANITY CHECK — only runs when edge is suspiciously large (>15pp),
-            # an AIReasoner has been injected, AND the risk check already passed.
-            # Skip the AI call if risk already rejected — no point spending API budget.
+            # an AIReasoner has been injected, the risk check already passed, AND
+            # the ticker is not in the pre-blocked set (dedup / manual skip / order cap).
+            # Skip the AI call for any ticker the daemon already knows it won't trade.
             if (edge.recommendation == "SANITY_CHECK"
                     and self.ai_reasoner is not None
-                    and risk.approved):
+                    and risk.approved
+                    and (skip_tickers is None or market_info.ticker not in skip_tickers)):
                 station_name = station_config.get("city", series_ticker)
                 direction_str = "above" if direction == "above" else "below"
                 ensemble_details = (

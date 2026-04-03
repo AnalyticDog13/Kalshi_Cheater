@@ -462,6 +462,7 @@ class KalshiClient:
             "get_positions",
             cache_key="positions",
             ttl=self.cache_ttl_portfolio,
+            limit=100,
         )
         # Try all known field names — SDK versions differ
         positions = (
@@ -470,9 +471,9 @@ class KalshiClient:
             or []
         )
         logger.warning(
-            "get_positions: found %d positions (attrs: %s)",
+            "get_positions: found %d positions | raw dump: %s",
             len(positions),
-            [a for a in dir(response) if not a.startswith('_')] if response else "None",
+            response.model_dump() if response else "None",
         )
         return positions
 

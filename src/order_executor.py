@@ -40,7 +40,7 @@ STALE_ORDER_MINUTES: float = 30.0
 PRICE_STALENESS_THRESHOLD: float = 0.02   # 2 cents — skip if mid drifted by this
 MIN_ORDER_PRICE: float = 0.01
 MAX_ORDER_PRICE: float = 0.99
-MAX_CONTRACT_PRICE: float = 0.50  # hard cap — never pay more than $0.50 per contract
+MAX_CONTRACT_PRICE: float = 0.80  # hard cap — never pay more than $0.80 per contract on empty book
 
 
 # ---------------------------------------------------------------------------

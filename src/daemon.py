@@ -254,32 +254,42 @@ class TradingDaemon:
         await self._reconcile_positions()
 
         cycle = 0
-        while not self._stop_event.is_set():
-            cycle += 1
-            try:
-                await self._run_cycle(cycle)
-            except Exception as exc:
-                logger.exception("Unhandled error in cycle %d: %s", cycle, exc)
-                await self.notifier.send_alert(f"Daemon error in cycle {cycle}: {exc}")
-                # Brief pause to avoid a tight crash loop
-                await asyncio.sleep(30)
-                continue
+        try:
+            while not self._stop_event.is_set():
+                cycle += 1
+                try:
+                    await self._run_cycle(cycle)
+                except Exception as exc:
+                    logger.exception("Unhandled error in cycle %d: %s", cycle, exc)
+                    await self.notifier.send_alert(f"Daemon error in cycle {cycle}: {exc}")
+                    # Brief pause to avoid a tight crash loop
+                    await asyncio.sleep(30)
+                    continue
 
-            if self._stop_event.is_set():
-                break
+                if self._stop_event.is_set():
+                    break
 
-            interval = self._get_poll_interval_seconds()
-            logger.debug("Sleeping %.0fs until next cycle.", interval)
-            try:
-                # Wait for the interval OR an early stop signal
-                await asyncio.wait_for(
-                    asyncio.shield(self._stop_event.wait()), timeout=interval
-                )
-            except asyncio.TimeoutError:
-                pass  # normal — interval elapsed
+                interval = self._get_poll_interval_seconds()
+                logger.debug("Sleeping %.0fs until next cycle.", interval)
+                try:
+                    # Wait for the interval OR an early stop signal
+                    await asyncio.wait_for(
+                        asyncio.shield(self._stop_event.wait()), timeout=interval
+                    )
+                except asyncio.TimeoutError:
+                    pass  # normal — interval elapsed
+
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            # Ctrl+C on Windows raises KeyboardInterrupt inside asyncio.run();
+            # on Unix it raises CancelledError after the signal handler fires.
+            # Either way we want to send the shutdown notification before exiting.
+            logger.info("Shutdown interrupt received.")
 
         logger.info("TradingDaemon stopped cleanly.")
-        await self.notifier.send_alert("Trading daemon stopped.")
+        try:
+            await self.notifier.send_alert("Trading daemon stopped.")
+        except Exception:
+            pass  # never block shutdown on a failed notification
 
     def stop(self) -> None:
         """Signal graceful shutdown. Current cycle will complete first."""

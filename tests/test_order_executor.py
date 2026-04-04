@@ -499,7 +499,7 @@ class TestMonitorOpenOrders:
 
     def test_mixed_orders_only_stale_cancelled(self):
         executor, client = _make_executor()
-        stale = _mock_open_order("ord-stale", age_minutes=15)
+        stale = _mock_open_order("ord-stale", age_minutes=35)
         fresh = _mock_open_order("ord-fresh", age_minutes=2)
         client.get_orders.return_value = [stale, fresh]
         client.cancel_order.return_value = MagicMock()
@@ -513,8 +513,8 @@ class TestMonitorOpenOrders:
     def test_cancel_exception_does_not_crash_loop(self):
         """If one cancel fails, the rest of the orders are still processed."""
         executor, client = _make_executor()
-        stale1 = _mock_open_order("ord-1", age_minutes=15)
-        stale2 = _mock_open_order("ord-2", age_minutes=15)
+        stale1 = _mock_open_order("ord-1", age_minutes=35)
+        stale2 = _mock_open_order("ord-2", age_minutes=35)
         client.get_orders.return_value = [stale1, stale2]
 
         # First cancel raises, second succeeds
@@ -541,8 +541,8 @@ class TestMonitorOpenOrders:
         order = MagicMock()
         order.order_id = "ord-str"
         order.status = "resting"
-        # 15 minutes ago
-        old_time = datetime.now(timezone.utc) - timedelta(minutes=15)
+        # 35 minutes ago
+        old_time = datetime.now(timezone.utc) - timedelta(minutes=35)
         order.created_time = old_time.isoformat()
         client.get_orders.return_value = [order]
         client.cancel_order.return_value = MagicMock()
@@ -568,7 +568,7 @@ class TestMonitorOpenOrders:
 
     def test_returns_list_of_cancelled_ids(self):
         executor, client = _make_executor()
-        orders = [_mock_open_order(f"ord-{i}", age_minutes=12) for i in range(3)]
+        orders = [_mock_open_order(f"ord-{i}", age_minutes=35) for i in range(3)]
         client.get_orders.return_value = orders
         client.cancel_order.return_value = MagicMock()
 

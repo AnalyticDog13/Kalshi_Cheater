@@ -6,6 +6,19 @@
 
 ---
 
+## FUTURE IMPROVEMENTS (not yet built — requires data before implementing)
+
+### Smart stale order replacement (medium complexity)
+**What:** Instead of cancelling every order older than `order_expiry_minutes`, each cycle re-evaluate each resting order's market and only cancel/replace if: (a) the edge has disappeared, or (b) a meaningfully better edge exists at the current price. Orders where the edge is still valid and the limit price is still competitive would stay on the book.
+
+**Why it helps:** On thin weather markets it can take >10 min to get a maker fill. The current system cancels a perfectly good order just because it's old, then re-places it at essentially the same price — wasting a cycle and risking a slightly worse price.
+
+**Why not yet:** No fill-rate data to confirm the 10-min timeout is actually hurting fills. More complex order management = more potential bugs in a live system. Worth building after 50+ trades if you see a pattern of "cancelled at 10 min, re-placed, filled 2 min later."
+
+**Files to change:** `src/order_executor.py` `monitor_open_orders()` (add per-order edge re-computation and comparison logic), `src/daemon.py` (pass current scan results into monitor so it can compare).
+
+---
+
 ## CHANGES (session 16 — 2026-04-03)
 *Stale order cancellation bug fixed. Order cap now immediately reflects cancellations. Cancel log deduped.*
 

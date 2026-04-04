@@ -99,6 +99,7 @@ def _brier_score(trades: list[dict], n_recent: int | None = None) -> float | Non
         and not t.get("order_cancelled", 0)
         and t.get("order_filled_time") is not None
         and t.get("strategy_arm") == "conservative"
+        and t.get("ensemble_prob_at_entry") is not None
     ]
     # Sort by resolution time descending so n_recent gets the most recent
     eligible.sort(key=lambda t: t.get("resolution_time") or "", reverse=True)
@@ -124,6 +125,8 @@ def _beat_market_rate(trades: list[dict], n_recent: int | None = None) -> tuple[
         and not t.get("order_cancelled", 0)
         and t.get("order_filled_time") is not None
         and t.get("strategy_arm") == "conservative"
+        and t.get("ensemble_prob_at_entry") is not None
+        and t.get("mid_price_at_signal") is not None
     ]
     eligible.sort(key=lambda t: t.get("resolution_time") or "", reverse=True)
     if n_recent:
@@ -403,13 +406,15 @@ def generate_daily_report(
             temp_f = t.get("actual_max_temp_f")
             temp_str = f"{temp_f:.1f}F" if temp_f is not None else "N/A"
             threshold = t.get("market_ticker", "").split("-T")[-1] if "-T" in t.get("market_ticker", "") else "N/A"
+            ens_p = t.get("ensemble_prob_at_entry")
+            ens_p_str = f"{ens_p:.1%}" if ens_p is not None else "N/A"
             lines.append(
                 f"| {t.get('market_ticker','')} | {t.get('city','')} | "
-                f"{t.get('side','')} | {t.get('ensemble_prob_at_entry', 0):.1%} | "
+                f"{t.get('side','')} | {ens_p_str} | "
                 f"{t.get('actual_outcome', '?')} | {temp_str} | {threshold}F | "
-                f"{t.get('ensemble_members_at_entry', '?')} | "
-                f"{t.get('ensemble_spread_at_entry', 0):.1f}F | "
-                f"{t.get('bias_correction_applied', 0):+.1f}F | "
+                f"{t.get('ensemble_members_at_entry') or 'N/A'} | "
+                f"{(t.get('ensemble_spread_at_entry') or 0):.1f}F | "
+                f"{(t.get('bias_correction_applied') or 0):+.1f}F | "
                 f"${(t.get('pnl') or 0):+.2f} |"
             )
         lines.append("")

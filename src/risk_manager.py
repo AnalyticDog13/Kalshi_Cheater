@@ -8,7 +8,7 @@ Hard limits (from settings.yaml):
   max_position_dollars:       $1    (one contract per trade at most prices)
   max_total_exposure_dollars: $10   (never more than $10 at risk at once)
   max_daily_loss_dollars:     $2    (stop trading for the day after $2 loss)
-  max_contract_price_dollars: $0.50 (hard cap — never pay more than $0.50 per contract)
+  max_contract_price_dollars: $0.99 (hard cap — never pay more than $0.99 per contract)
 
 The risk manager is STATEFUL — it tracks total current exposure and today's
 realized P&L so checks 2 and 3 are accurate across multiple calls in the
@@ -331,8 +331,8 @@ class RiskManager:
             notes.append(f"Check 11 OK: market status={market_status}")
 
         # ----------------------------------------------------------
-        # Check 12: Contract price hard cap — never pay > $0.50 per contract
-        # This ensures individual bets stay tiny regardless of Kelly sizing.
+        # Check 12: Contract price hard cap — never pay > max_contract_price per contract
+        # Protects against extreme-priced contracts; max set in settings.yaml.
         # ----------------------------------------------------------
         if edge.entry_price > self.limits.max_contract_price_dollars:
             failed.append(

@@ -53,12 +53,14 @@ class EdgeParams:
     extreme_price_lower_bound: float = 0.02
     extreme_price_upper_bound: float = 0.98
     sanity_check_edge_threshold: float = 0.15  # edges above this → SANITY_CHECK (from ai section)
+    max_contracts_per_order: int = 1        # hard cap: never buy more than this many contracts
 
     @classmethod
     def from_settings(cls, settings: dict) -> "EdgeParams":
-        """Load from the 'edge' and 'ai' sections of settings.yaml (already parsed)."""
+        """Load from the 'edge', 'ai', and 'risk' sections of settings.yaml (already parsed)."""
         e = settings.get("edge", {})
         ai = settings.get("ai", {})
+        r = settings.get("risk", {})
         return cls(
             min_edge_high_confidence=e.get("min_edge_high_confidence", 0.04),
             min_edge_medium_confidence=e.get("min_edge_medium_confidence", 0.06),
@@ -69,6 +71,7 @@ class EdgeParams:
             extreme_price_lower_bound=e.get("extreme_price_lower_bound", 0.02),
             extreme_price_upper_bound=e.get("extreme_price_upper_bound", 0.98),
             sanity_check_edge_threshold=ai.get("sanity_check_edge_threshold", 0.15),
+            max_contracts_per_order=r.get("max_contracts_per_order", 1),
         )
 
 
@@ -280,12 +283,14 @@ def compute_edge(
     )
     position_dollars = max(0.0, position_dollars)
 
-    # Contracts: floor so we don't overshoot the dollar cap
+    # Contracts: floor so we don't overshoot the dollar cap, then apply hard per-order cap
     if entry_price > 0:
         recommended_contracts = max(1, int(position_dollars / entry_price))
         # Cap so we don't exceed position limit even after rounding
-        max_contracts = int(max_position_dollars / entry_price)
-        recommended_contracts = min(recommended_contracts, max_contracts)
+        dollar_cap_contracts = int(max_position_dollars / entry_price)
+        recommended_contracts = min(recommended_contracts, dollar_cap_contracts)
+        # Hard cap from settings (max_contracts_per_order) — overrides Kelly sizing
+        recommended_contracts = min(recommended_contracts, params.max_contracts_per_order)
     else:
         recommended_contracts = 0
 

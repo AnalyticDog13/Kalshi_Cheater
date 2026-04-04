@@ -475,6 +475,7 @@ class TradingDaemon:
         today_utc = now_utc.date()
         if self._last_summary_date is None or today_utc > self._last_summary_date:
             await self._send_daily_summary()
+            self.conservative_risk.reset_daily_state()
             self._last_summary_date = today_utc
 
         if self._last_report_date is None or today_utc > self._last_report_date:
@@ -1061,9 +1062,13 @@ class TradingDaemon:
                             trade.fill_price,
                         )
                     exposure = trade.fill_price * trade.quantity
+                    # Binary contract P&L: pays $1 if our side wins, $0 if it loses.
+                    # side_outcome = 1 if our side won, 0 if it lost.
+                    side_outcome = actual_outcome if trade.side.upper() == "YES" else (1 - actual_outcome)
+                    trade_pnl = (side_outcome - trade.fill_price) * trade.quantity
                     self.conservative_risk.record_position_closed(
                         dollars=exposure,
-                        pnl=0.0,   # actual P&L is computed inside record_outcome
+                        pnl=trade_pnl,
                     )
             except Exception as exc:
                 logger.warning("Failed to auto-record outcome for %s: %s", ticker, exc)

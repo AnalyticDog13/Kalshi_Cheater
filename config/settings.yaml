@@ -56,7 +56,7 @@ edge:
   extreme_price_upper_bound: 0.98
 
 risk:
-  max_position_dollars: 1.00          # ~1 contract per trade at most prices
+  max_position_dollars: 0.50          # 1 contract per trade at most prices
   max_total_exposure_dollars: 15.00   # never more than 75% of $20 at risk at once
   max_daily_loss_dollars: 3.00        # stop trading for the day after $3 loss (~15% of bankroll)
   max_open_orders: 5

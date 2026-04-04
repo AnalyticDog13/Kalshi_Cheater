@@ -32,8 +32,9 @@ import yaml
 
 from src.kalshi_client import KalshiClient
 from src.data_feeds.weather_ensemble import OpenMeteoEnsembleClient
+from src.data_feeds.weather_observations import NOAAObservationClient
 from src.probability_engine import ProbabilityEngine, BiasDatabase
-from src.market_scanner import MarketScanner, ScanResult
+from src.market_scanner import MarketScanner, ScanResult, parse_measurement_date_from_ticker
 from src.edge_calculator import EdgeParams, compute_edge
 from src.risk_manager import RiskManager, RiskLimits
 from src.order_executor import OrderExecutor
@@ -181,6 +182,9 @@ class TradingDaemon:
             ensemble_client=self.ensemble_client,
             bias_db=self.bias_db,
         )
+
+        # --- NOAA observation client (post-resolution ground truth) ----------
+        self.noaa_client = NOAAObservationClient()
 
         # --- AI reasoner (optional — fail open if key absent) ----------------
         ai_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
@@ -769,7 +773,7 @@ class TradingDaemon:
         Only affects conservative-arm trades (exploratory trades have no real exposure).
         """
         try:
-            open_positions = self.tracker.get_open_positions()
+            open_positions = self.tracker.get_pending_trades()
         except Exception as exc:
             logger.warning("Could not query positions for cancellation: %s", exc)
             return
@@ -782,7 +786,7 @@ class TradingDaemon:
 
             try:
                 self.tracker.db[self.tracker.TABLE].update(
-                    trade.trade_id, {"order_cancelled": 1}
+                    trade.trade_id, {"order_cancelled": 1, "pnl": 0.0}
                 )
             except Exception as exc:
                 logger.warning(
@@ -1006,7 +1010,7 @@ class TradingDaemon:
             try:
                 market = await self.kalshi_client.get_market(ticker)
             except Exception as exc:
-                logger.debug("Could not fetch market %s for resolution check: %s", ticker, exc)
+                logger.warning("Could not fetch market %s for resolution check: %s", ticker, exc)
                 continue
 
             # get_market() returns the inner market dict from GetMarketResponse
@@ -1035,11 +1039,32 @@ class TradingDaemon:
             # Use market close_time as the resolution timestamp
             resolution_time = _parse_datetime(close_time_raw) or datetime.now(timezone.utc)
 
+            # Fetch actual max temperature from NOAA (best-effort — never blocks resolution)
+            actual_max_temp_f: float | None = None
+            series_ticker = ticker.split("-")[0]
+            station_cfg = self._station_mapping.get(series_ticker, {})
+            station_id = station_cfg.get("station_id")
+            measurement_date = parse_measurement_date_from_ticker(ticker)
+            if station_id and measurement_date:
+                try:
+                    noaa_result = await self.noaa_client.get_daily_max_temperature(
+                        station_id=station_id,
+                        target_date=measurement_date,
+                    )
+                    if noaa_result:
+                        actual_max_temp_f = noaa_result["max_temp_f"]
+                        logger.info(
+                            "NOAA ground truth for %s: %.1fF at %s on %s",
+                            ticker, actual_max_temp_f, station_id, measurement_date,
+                        )
+                except Exception as exc:
+                    logger.warning("NOAA fetch failed for %s (%s): %s", ticker, station_id, exc)
+
             try:
                 self.tracker.record_outcome(
                     market_ticker=ticker,
                     actual_outcome=actual_outcome,
-                    actual_max_temp_f=None,   # NOAA fetch not implemented here; None is fine
+                    actual_max_temp_f=actual_max_temp_f,
                     resolution_time=resolution_time,
                 )
                 logger.info(

@@ -505,7 +505,7 @@ class TestGetOpenPositions:
 
     def test_returns_trade_record_objects(self):
         t = _make_tracker()
-        rec = _record("t1", side="NO", entry_price=0.40, strategy_arm="exploratory")
+        rec = _record("t1", side="NO", entry_price=0.40, strategy_arm="conservative")
         rec.order_filled_time = _dt(hour=13)
         t.record_trade(rec)
         positions = t.get_open_positions()
@@ -513,7 +513,7 @@ class TestGetOpenPositions:
         pos = positions[0]
         assert isinstance(pos, TradeRecord)
         assert pos.side == "NO"
-        assert pos.strategy_arm == "exploratory"
+        assert pos.strategy_arm == "conservative"
         assert pos.entry_price == pytest.approx(0.40)
 
     def test_ordered_by_fill_time_ascending(self):

@@ -396,14 +396,21 @@ def generate_daily_report(
         lines += [
             "### Resolved Today",
             "",
-            "| Market | City | Side | Ensemble P | Actual | P&L |",
-            "|--------|------|------|-----------|--------|-----|",
+            "| Market | City | Side | Ensemble P | Actual Outcome | Actual Temp | Threshold | Members | Spread | Bias | P&L |",
+            "|--------|------|------|-----------|----------------|-------------|-----------|---------|--------|------|-----|",
         ]
         for t in sorted(resolved_today, key=lambda x: x.get("resolution_time") or ""):
+            temp_f = t.get("actual_max_temp_f")
+            temp_str = f"{temp_f:.1f}F" if temp_f is not None else "N/A"
+            threshold = t.get("market_ticker", "").split("-T")[-1] if "-T" in t.get("market_ticker", "") else "N/A"
             lines.append(
                 f"| {t.get('market_ticker','')} | {t.get('city','')} | "
                 f"{t.get('side','')} | {t.get('ensemble_prob_at_entry', 0):.1%} | "
-                f"{t.get('actual_outcome', '?')} | ${(t.get('pnl') or 0):+.2f} |"
+                f"{t.get('actual_outcome', '?')} | {temp_str} | {threshold}F | "
+                f"{t.get('ensemble_members_at_entry', '?')} | "
+                f"{t.get('ensemble_spread_at_entry', 0):.1f}F | "
+                f"{t.get('bias_correction_applied', 0):+.1f}F | "
+                f"${(t.get('pnl') or 0):+.2f} |"
             )
         lines.append("")
 
@@ -659,6 +666,46 @@ def generate_weekly_report(
     else:
         lines.append("| No resolved trades yet | — | — | — | — | — |")
 
+    # Calibration detail table — all resolved conservative trades, most recent first
+    all_resolved_cons = [
+        t for t in all_trades
+        if t.get("strategy_arm") == "conservative"
+        and t.get("actual_outcome") is not None
+        and not t.get("order_cancelled", 0)
+        and t.get("order_filled_time") is not None
+    ]
+    all_resolved_cons.sort(key=lambda t: t.get("resolution_time") or "", reverse=True)
+
+    lines += [
+        "",
+        "---",
+        "",
+        "## Calibration Detail — All Resolved Trades (Most Recent First)",
+        "",
+        "_(For AI bias analysis: ensemble probability vs actual temperature vs outcome)_",
+        "",
+        "| Date | Market | City | Side | Ens P | Actual Outcome | Actual Temp | Threshold | Members | Spread | Bias | P&L |",
+        "|------|--------|------|------|-------|----------------|-------------|-----------|---------|--------|------|-----|",
+    ]
+    if all_resolved_cons:
+        for t in all_resolved_cons:
+            temp_f = t.get("actual_max_temp_f")
+            temp_str = f"{temp_f:.1f}F" if temp_f is not None else "N/A"
+            ticker = t.get("market_ticker", "")
+            threshold = ticker.split("-T")[-1] + "F" if "-T" in ticker else "N/A"
+            res_date = _date_of(t.get("resolution_time")) or "N/A"
+            lines.append(
+                f"| {res_date} | {ticker} | {t.get('city','')} | "
+                f"{t.get('side','')} | {t.get('ensemble_prob_at_entry', 0):.1%} | "
+                f"{t.get('actual_outcome', '?')} | {temp_str} | {threshold} | "
+                f"{t.get('ensemble_members_at_entry', '?')} | "
+                f"{t.get('ensemble_spread_at_entry', 0):.1f}F | "
+                f"{t.get('bias_correction_applied', 0):+.1f}F | "
+                f"${(t.get('pnl') or 0):+.2f} |"
+            )
+    else:
+        lines.append("| No resolved trades yet | — | — | — | — | — | — | — | — | — | — | — |")
+
     lines += [
         "",
         "---",
@@ -824,6 +871,16 @@ def generate_feed_to_ai(
         "",
         "8. **Red flags.** Are there any anomalies, unexpected patterns, or signs of",
         "   regime change that warrant investigation before the next trading week?",
+        "",
+        "9. **Ensemble bias analysis.** Using the Calibration Detail table, examine cases",
+        "   where `actual_max_temp_f` is available. For each city:",
+        "   - Is the ensemble systematically over- or under-predicting temperatures?",
+        "   - Does the bias vary by direction (e.g. warm bias vs cold bias)?",
+        "   - Are there cases where ensemble spread was low (high confidence) but the",
+        "     actual temp was far from the ensemble mean — suggesting the model was",
+        "     confidently wrong?",
+        "   - Suggest specific `bias_correction_applied` adjustments per city if patterns",
+        "     are clear and N >= 10 observations per city.",
         "",
     ]
 

@@ -286,10 +286,17 @@ class Tracker:
         Returns:
             Brier score as a float, or None if no resolved trades exist.
         """
+        # Only conservative trades with a real ensemble probability recorded.
+        # Exploratory (paper) trades and pre-fix ghost records (which have
+        # NULL ensemble_prob_at_entry) are excluded so they don't corrupt
+        # the score.
         query = (
             "SELECT ensemble_prob_at_entry, actual_outcome "
             "FROM trades "
-            "WHERE actual_outcome IS NOT NULL AND order_cancelled = 0 "
+            "WHERE actual_outcome IS NOT NULL "
+            "AND order_cancelled = 0 "
+            "AND strategy_arm = 'conservative' "
+            "AND ensemble_prob_at_entry IS NOT NULL "
             "ORDER BY resolution_time DESC"
         )
         rows = list(self.db.execute(query).fetchall())
@@ -314,10 +321,13 @@ class Tracker:
             Dict mapping ISO date string (e.g. "2026-04-01") to total P&L for
             that day. Only dates with at least one resolved trade appear.
         """
+        # Only conservative (real-money) trades. Exploratory paper trades and
+        # ghost pre-fix records are excluded so P&L reflects actual cash.
         query = (
             "SELECT resolution_time, pnl "
             "FROM trades "
-            "WHERE pnl IS NOT NULL AND resolution_time IS NOT NULL"
+            "WHERE pnl IS NOT NULL AND resolution_time IS NOT NULL "
+            "AND strategy_arm = 'conservative'"
         )
         rows = self.db.execute(query).fetchall()
 
@@ -332,12 +342,16 @@ class Tracker:
 
     def get_open_positions(self) -> list[TradeRecord]:
         """
-        Return all trades that:
+        Return all CONSERVATIVE-arm trades that:
           - Were filled (order_filled_time IS NOT NULL)
           - Have not yet resolved (actual_outcome IS NULL)
           - Were not cancelled
 
-        These are contracts currently held in the portfolio.
+        Exploratory (paper-trade) records are excluded so they don't bloat
+        the dedup set or trigger unnecessary Kalshi API calls in
+        _sync_resolutions(). record_outcome() still updates exploratory
+        records when called with a ticker discovered from a conservative
+        position, so dual-arm comparison data is preserved.
 
         Returns:
             List of TradeRecord objects, ordered by order_filled_time ascending.
@@ -346,7 +360,8 @@ class Tracker:
             self.db[self.TABLE].rows_where(
                 "order_filled_time IS NOT NULL "
                 "AND actual_outcome IS NULL "
-                "AND order_cancelled = 0",
+                "AND order_cancelled = 0 "
+                "AND strategy_arm != 'exploratory'",
                 order_by="order_filled_time ASC",
             )
         )

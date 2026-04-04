@@ -287,8 +287,11 @@ class TradingDaemon:
 
         logger.info("TradingDaemon stopped cleanly.")
         try:
-            await self.notifier.send_alert("Trading daemon stopped.")
-        except Exception:
+            # asyncio.shield() prevents the cancellation state from killing the
+            # HTTP request mid-flight. BaseException catches CancelledError which
+            # is not a subclass of Exception in Python 3.8+.
+            await asyncio.shield(self.notifier.send_alert("Trading daemon stopped."))
+        except BaseException:
             pass  # never block shutdown on a failed notification
 
     def stop(self) -> None:

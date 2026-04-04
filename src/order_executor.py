@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-STALE_ORDER_MINUTES: float = 10.0
+STALE_ORDER_MINUTES: float = 30.0
 PRICE_STALENESS_THRESHOLD: float = 0.02   # 2 cents — skip if mid drifted by this
 MIN_ORDER_PRICE: float = 0.01
 MAX_ORDER_PRICE: float = 0.99

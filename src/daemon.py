@@ -1046,6 +1046,13 @@ class TradingDaemon:
                     "Auto-resolved %s: result=%s (outcome=%d)",
                     ticker, result.upper(), actual_outcome,
                 )
+                # Compute total P&L across all settled trades for this ticker
+                settled_for_notify = [p for p in filled if p.market_ticker == ticker]
+                total_pnl = sum(
+                    ((actual_outcome if t.side.upper() == "YES" else (1 - actual_outcome)) - t.fill_price) * t.quantity
+                    for t in settled_for_notify
+                )
+                await self.notifier.send_trade_outcome(ticker, actual_outcome, total_pnl)
                 # Release exposure in risk manager for the settled position
                 settled_trades = [p for p in filled if p.market_ticker == ticker]
                 for trade in settled_trades:

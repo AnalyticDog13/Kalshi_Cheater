@@ -8,16 +8,31 @@
 
 ## FUTURE IMPROVEMENTS (not yet built — requires data before implementing)
 
-### Smart stale order replacement (medium complexity)
-**What:** Instead of cancelling every order older than `order_expiry_minutes`, each cycle re-evaluate each resting order's market and only cancel/replace if: (a) the edge has disappeared, or (b) a meaningfully better edge exists at the current price. Orders where the edge is still valid and the limit price is still competitive would stay on the book.
+### Smart stale order replacement (medium complexity) — Option B
+**What:** Instead of cancelling every order older than `STALE_ORDER_MINUTES`, each cycle re-evaluate each resting order's market and only cancel/replace if: (a) the edge has disappeared, or (b) a meaningfully better edge exists at the current price. Orders where the edge is still valid and the limit price is still competitive would stay on the book.
 
 **Why it helps:** On thin weather markets it can take >10 min to get a maker fill. The current system cancels a perfectly good order just because it's old, then re-places it at essentially the same price — wasting a cycle and risking a slightly worse price.
 
-**Why not yet:** No fill-rate data to confirm the 10-min timeout is actually hurting fills. More complex order management = more potential bugs in a live system. Worth building after 50+ trades if you see a pattern of "cancelled at 10 min, re-placed, filled 2 min later."
+**Why not yet:** No fill-rate data to confirm the 30-min timeout is actually hurting fills. More complex order management = more potential bugs in a live system. Worth building after 50+ trades if you see a pattern of "cancelled at 30 min, re-placed, filled 2 min later."
 
-**Files to change:** `src/order_executor.py` `monitor_open_orders()` (add per-order edge re-computation and comparison logic), `src/daemon.py` (pass current scan results into monitor so it can compare).
+**Current interim fix (Option A — implemented session 17):** After a stale-cancel, the ticker is added to `_cancelled_cooldown` (a `dict[str, datetime]` on `TradingDaemon`) and suppressed from the skip set for `CANCELLED_COOLDOWN_MINUTES = 15` minutes. This breaks the cancel→re-place→cancel churn loop at low complexity cost. Option B above supersedes this when built.
+
+**Files to change for Option B:** `src/order_executor.py` `monitor_open_orders()` (add per-order edge re-computation and comparison logic), `src/daemon.py` (pass current scan results into monitor so it can compare). Remove `_cancelled_cooldown` logic when Option B is implemented.
 
 ---
+
+## CHANGES (session 17 — 2026-04-04)
+*Stale-cancel churn loop fixed. Fill price extraction made robust. MAX_CONTRACT_PRICE raised.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| FIX | `src/daemon.py` `__init__` + `_run_cycle()` + `_mark_order_cancelled()` | Added `_cancelled_cooldown: dict[str, datetime]` to suppress re-placement of stale-cancelled tickers for `CANCELLED_COOLDOWN_MINUTES = 15` minutes. Previously, a cancelled order would be immediately re-placed on the same ticker next cycle — same price, same edge. Now the ticker is excluded from the skip set for 15 min, forcing the scanner to consider other markets. Expired entries pruned each cycle. See FUTURE IMPROVEMENTS for Option B (per-order edge re-evaluation). |
+| FIX | `src/kalshi_client.py` | Added `get_order(order_id)` — wraps single-order endpoint (`GET /portfolio/orders/{id}`), unwraps inner `Order` from `GetOrderResponse`. Returns full price fields that the list endpoint omits on executed orders. |
+| FIX | `src/daemon.py` `_sync_fills()` | 3-tier fill price fallback: (1) list endpoint price; (2) retry with `get_order()` single-order endpoint; (3) fall back to `entry_price` with WARNING. Previously a list-endpoint miss caused `continue` — the fill was never recorded and the trade stayed pending in DB forever. |
+| FIX | `src/order_executor.py` | `MAX_CONTRACT_PRICE` raised from 0.50 to 0.80 — applies only to empty-book BUY_YES fallback price. Active-book orders follow the best bid regardless. |
+| FIX | `tests/test_order_executor.py` | Updated `test_buy_yes_empty_book_uses_fair_value_minus_buffer` expected price from 0.50 to 0.68 (fair_value 0.70 − 0.02 = 0.68, now below the 0.80 cap). |
+
+**State as of end of session 17:** 543/543 tests passing. Churn loop eliminated — cancelled tickers suppressed for 15 min before re-evaluation. Fill price extraction now handles Kalshi list endpoint omitting price fields on executed orders.
 
 ## CHANGES (session 16 — 2026-04-03)
 *Stale order cancellation bug fixed. Order cap now immediately reflects cancellations. Cancel log deduped.*

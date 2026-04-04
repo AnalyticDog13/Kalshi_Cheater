@@ -82,6 +82,17 @@ def load_settings(
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+# After a stale-cancel, suppress re-placing the same ticker for this many
+# minutes.  Prevents the cancel→re-place→cancel churn loop.
+# Option B (per CLAUDE.md FUTURE IMPROVEMENTS) would replace this with
+# per-order edge re-evaluation instead of a flat cooldown.
+CANCELLED_COOLDOWN_MINUTES: float = 15.0
+
+
+# ---------------------------------------------------------------------------
 # Main daemon class
 # ---------------------------------------------------------------------------
 
@@ -122,6 +133,11 @@ class TradingDaemon:
 
         # Pause flag path — set by CLI `pause` command; checked each cycle
         self._pause_flag = Path(pause_flag_path)
+
+        # Cooldown dict: ticker → time it was last stale-cancelled.
+        # Tickers stay out of the skip set for CANCELLED_COOLDOWN_MINUTES after
+        # cancellation, preventing immediate re-placement of the same order.
+        self._cancelled_cooldown: dict[str, datetime] = {}
 
         self._build_components(db_path, calibration_db_path, bias_db_path)
 
@@ -404,11 +420,28 @@ class TradingDaemon:
         if db_open_tickers:
             logger.info("DB open positions (dedup): %s", sorted(db_open_tickers))
 
+        # Tickers recently stale-cancelled — suppress for CANCELLED_COOLDOWN_MINUTES
+        # to prevent the immediate cancel→re-place churn loop.
+        now_utc = datetime.now(timezone.utc)
+        cooldown_tickers: set[str] = {
+            ticker
+            for ticker, cancelled_at in self._cancelled_cooldown.items()
+            if (now_utc - cancelled_at).total_seconds() / 60.0 < CANCELLED_COOLDOWN_MINUTES
+        }
+        # Prune expired entries so the dict doesn't grow unbounded
+        self._cancelled_cooldown = {
+            t: ts for t, ts in self._cancelled_cooldown.items()
+            if (now_utc - ts).total_seconds() / 60.0 < CANCELLED_COOLDOWN_MINUTES
+        }
+        if cooldown_tickers:
+            logger.debug("Cooldown suppressing %d ticker(s): %s", len(cooldown_tickers), sorted(cooldown_tickers))
+
         open_order_tickers: set[str] = (
             {_ticker(o) for o in open_orders}
             | {_ticker(p) for p in open_positions}
             | db_open_tickers
             | _manual_skip
+            | cooldown_tickers
         ) - {None}
 
         # --- 5. Market scan ----------------------------------------------
@@ -798,6 +831,7 @@ class TradingDaemon:
             self.conservative_risk.record_position_closed(
                 position_dollars, pnl=0.0
             )
+            self._cancelled_cooldown[trade.market_ticker] = datetime.now(timezone.utc)
             logger.info(
                 "Order %s cancelled; $%.2f exposure released.",
                 order_id,

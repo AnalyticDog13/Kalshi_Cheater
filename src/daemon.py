@@ -922,14 +922,37 @@ class TradingDaemon:
             # ---------------------------------------------------------------
             fill_price = _extract_fill_price(order, trade.side)
             if fill_price <= 0:
+                # List endpoint often returns executed orders without price fields.
+                # Retry with the single-order endpoint which returns full details.
+                logger.info(
+                    "_sync_fills: list endpoint returned no price for %s — "
+                    "fetching individual order for full price data.",
+                    trade.market_ticker,
+                )
+                try:
+                    detailed = await self.client.get_order(trade.trade_id)
+                    fill_price = _extract_fill_price(detailed, trade.side)
+                except Exception as exc:
+                    logger.warning(
+                        "_sync_fills: get_order(%s) failed: %s",
+                        trade.trade_id, exc,
+                    )
+
+            if fill_price <= 0:
+                # Both endpoints failed — fall back to entry_price.
+                # For limit orders the fill price cannot exceed the limit, so
+                # entry_price is the worst-case accurate value (maker fills
+                # typically execute exactly at the limit price).
                 logger.warning(
-                    "_sync_fills: could not extract fill price for %s (status=%r). "
+                    "_sync_fills: could not extract fill price for %s (status=%r) "
+                    "after individual fetch — falling back to entry_price=%.4f. "
                     "Available order fields: %s",
                     trade.market_ticker,
                     order_status,
+                    trade.entry_price,
                     _order_field_summary(order),
                 )
-                continue
+                fill_price = trade.entry_price
 
             # Quantity cross-check: verify actual filled quantity matches DB.
             # Partial fills are possible on thin books.

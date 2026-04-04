@@ -571,6 +571,27 @@ class KalshiClient:
         inner = getattr(raw, "order", None)
         return inner if inner is not None else raw
 
+    async def get_order(self, order_id: str) -> Any:
+        """
+        Fetch a single order by ID (GET /portfolio/orders/{order_id}).
+
+        The list endpoint (get_orders) returns minimal Order objects — price
+        fields are often None on executed orders.  The single-order endpoint
+        returns full details including yes_price / no_price.
+
+        Not cached — only called when the list endpoint failed to provide
+        a fill price, so we always want fresh data.
+        """
+        raw = await self._call(
+            "get_order",
+            cache_key=None,
+            ttl=0,
+            order_id=order_id,
+        )
+        # GetOrderResponse wraps the actual Order inside a .order attribute.
+        inner = getattr(raw, "order", None)
+        return inner if inner is not None else raw
+
     async def cancel_order(self, order_id: str) -> Any:
         """Cancel an open order."""
         logger.info("Cancelling order: %s", order_id)

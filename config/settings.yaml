@@ -62,7 +62,7 @@ risk:
   max_open_orders: 5
   max_contract_price_dollars: 0.99    # allow contracts up to $0.99 (any reasonable price)
   max_contracts_per_order: 1          # HARD CAP: always exactly 1 contract per order
-  order_expiry_minutes: 10            # cancel and re-evaluate after this long unfilled
+  order_expiry_minutes: 30            # cancel and re-evaluate after this long unfilled
 
 calibration:
   min_markets_for_bias_correction: 30     # per station per season

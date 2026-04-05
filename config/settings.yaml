@@ -59,7 +59,7 @@ risk:
   max_position_dollars: 0.99          # up to 1 contract at any price up to $0.99
   max_total_exposure_dollars: 15.00   # never more than 75% of $20 at risk at once
   max_daily_loss_dollars: 3.00        # stop trading for the day after $3 loss (~15% of bankroll)
-  max_open_orders: 5
+  max_open_orders: 8
   max_contract_price_dollars: 0.99    # allow contracts up to $0.99 (any reasonable price)
   max_contracts_per_order: 1          # HARD CAP: always exactly 1 contract per order
   order_expiry_minutes: 30            # cancel and re-evaluate after this long unfilled

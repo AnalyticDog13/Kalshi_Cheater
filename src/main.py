@@ -38,6 +38,7 @@ logger = logging.getLogger(__name__)
 DATA_DIR        = Path("./data")
 PID_FILE        = DATA_DIR / "daemon.pid"
 PAUSE_FLAG      = DATA_DIR / "daemon.pause"
+STOP_FLAG       = DATA_DIR / "daemon.stop"
 
 DEFAULT_CONFIG_DIR = "./config"
 DEFAULT_DB_PATH    = "./data/trades.db"
@@ -126,6 +127,7 @@ def start(config_dir: str, db_path: str, live: bool) -> None:
         asyncio.run(daemon.run())
     finally:
         PID_FILE.unlink(missing_ok=True)
+        STOP_FLAG.unlink(missing_ok=True)  # clean up if stop was triggered externally
         click.echo("Daemon stopped cleanly.")
 
 
@@ -147,15 +149,20 @@ def stop() -> None:
         PID_FILE.unlink(missing_ok=True)
         sys.exit(1)
 
-    try:
-        os.kill(pid, signal.SIGTERM)
-        click.echo(f"SIGTERM sent to PID {pid}. Daemon will stop after the current cycle.")
-    except PermissionError:
-        click.echo(f"Permission denied sending signal to PID {pid}.", err=True)
-        sys.exit(1)
-    except OSError as exc:
-        click.echo(f"Failed to signal daemon: {exc}", err=True)
-        sys.exit(1)
+    # Primary stop mechanism: write a flag file that the daemon checks every
+    # 10 seconds. This works on all platforms — on Windows, os.kill(SIGTERM)
+    # calls TerminateProcess() which hard-kills the process before it can send
+    # the shutdown Telegram notification.
+    STOP_FLAG.write_text("")
+    click.echo(f"Stop flag written. Daemon (PID {pid}) will stop after the current cycle.")
+
+    # On Unix, also send SIGTERM so the daemon wakes from its sleep immediately
+    # rather than waiting up to 10 seconds for the next flag check.
+    if sys.platform != "win32":
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -134,6 +134,11 @@ class TradingDaemon:
         # Pause flag path — set by CLI `pause` command; checked each cycle
         self._pause_flag = Path(pause_flag_path)
 
+        # Stop flag path — written by CLI `stop` command; daemon checks this
+        # each cycle and during sleep to shut down gracefully without relying
+        # on SIGTERM (which hard-kills on Windows via TerminateProcess).
+        self._stop_flag = Path(pause_flag_path).parent / "daemon.stop"
+
         # Cooldown dict: ticker → time it was last stale-cancelled.
         # Tickers stay out of the skip set for CANCELLED_COOLDOWN_MINUTES after
         # cancellation, preventing immediate re-placement of the same order.
@@ -276,6 +281,17 @@ class TradingDaemon:
         cycle = 0
         try:
             while not self._stop_event.is_set():
+                # Check stop flag file (written by `python -m src.main stop`).
+                # This is the primary graceful-stop mechanism on Windows where
+                # os.kill(SIGTERM) hard-kills the process instead of delivering a signal.
+                if self._stop_flag.exists():
+                    try:
+                        self._stop_flag.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                    logger.info("Stop flag detected — shutting down after current cycle.")
+                    self._stop_event.set()
+                    break
                 cycle += 1
                 try:
                     await self._run_cycle(cycle)
@@ -291,13 +307,26 @@ class TradingDaemon:
 
                 interval = self._get_poll_interval_seconds()
                 logger.debug("Sleeping %.0fs until next cycle.", interval)
-                try:
-                    # Wait for the interval OR an early stop signal
-                    await asyncio.wait_for(
-                        asyncio.shield(self._stop_event.wait()), timeout=interval
-                    )
-                except asyncio.TimeoutError:
-                    pass  # normal — interval elapsed
+                # Check stop flag every 10 s during sleep so the daemon responds
+                # to `python -m src.main stop` promptly on all platforms.
+                remaining = interval
+                while remaining > 0 and not self._stop_event.is_set():
+                    if self._stop_flag.exists():
+                        try:
+                            self._stop_flag.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        logger.info("Stop flag detected — shutting down after current cycle.")
+                        self._stop_event.set()
+                        break
+                    chunk = min(10.0, remaining)
+                    try:
+                        await asyncio.wait_for(
+                            asyncio.shield(self._stop_event.wait()), timeout=chunk
+                        )
+                    except asyncio.TimeoutError:
+                        pass  # normal — chunk elapsed
+                    remaining -= chunk
 
         except (asyncio.CancelledError, KeyboardInterrupt):
             # Ctrl+C on Windows raises KeyboardInterrupt inside asyncio.run();

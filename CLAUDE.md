@@ -582,6 +582,18 @@ These are runtime issues that only reveal themselves when talking to live APIs. 
 
 **Read this section before writing any code. It defines how you should work with the developer.**
 
+### Context Efficiency — Standing Guideline
+
+This project has a large spec and a long-running codebase. To avoid frequent chat compaction and unnecessary usage of daily/weekly limits, Claude Code should default to a lean approach — but can go deeper when the task genuinely requires it.
+
+- **Prefer targeted reads over broad exploration.** Use `Grep`/`Glob` for specific lookups rather than reading entire files. Only read the parts of a file relevant to the task.
+- **Don't re-read files already in context.** If a file's content is already visible in this conversation, don't fetch it again.
+- **Avoid spawning subagents unless the task clearly warrants it.** Each subagent starts cold and may duplicate context you already have.
+- **Keep responses concise.** No preamble, no trailing summaries of what was just done.
+- **Batch related changes.** Combine small edits to the same file rather than making multiple round-trips.
+
+If a task genuinely requires broader exploration, deeper reads, or multiple subagents, that is fine — use what you need. This guideline is about defaulting to efficiency, not enforcing artificial constraints that hurt the work.
+
 ### How to Interact with the Developer
 
 You are building a real trading system that will eventually handle real money. The developer is not a professional software engineer — they understand the strategy and the markets but may not know Python idioms, async patterns, or deployment details. Your job is to be their technical partner, not a silent code generator.

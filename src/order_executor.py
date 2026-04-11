@@ -41,6 +41,7 @@ PRICE_STALENESS_THRESHOLD: float = 0.02   # 2 cents — skip if mid drifted by t
 MIN_ORDER_PRICE: float = 0.01
 MAX_ORDER_PRICE: float = 0.99
 MAX_CONTRACT_PRICE: float = 0.80  # hard cap — never pay more than $0.80 per contract on empty book
+COMPETITIVE_PRICE_THRESHOLD: float = 0.10  # skip if our limit is >10¢ below the market bid for our side
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +119,14 @@ class OrderExecutor:
         Returns:
             OrderResult with was_placed=True on successful submission.
         """
+        # Step A diagnostic — logs the direction as received from the edge assessment.
+        # This confirms whether direction is already wrong on arrival (mutation upstream)
+        # or gets corrupted inside this function.
+        logger.info(
+            "place_order called: %s direction=%s entry_price=%.2f fair_value=%.2f",
+            ticker, edge.direction, edge.entry_price, edge.fair_value,
+        )
+
         # ------------------------------------------------------------------
         # Step 1: Fresh orderbook
         # ------------------------------------------------------------------
@@ -185,6 +194,39 @@ class OrderExecutor:
                 order_price = round(edge.entry_price - 0.02, 2)
 
         order_price = max(MIN_ORDER_PRICE, min(MAX_ORDER_PRICE, round(order_price, 2)))
+
+        # ------------------------------------------------------------------
+        # Step 3b: Competitive price guard
+        # Skip if our limit price is more than COMPETITIVE_PRICE_THRESHOLD below
+        # the current market bid for the side we're buying. An order that far
+        # below the book will never fill as a maker — it just occupies a slot.
+        # Example: BUY_NO at $0.48 when NO is trading at $0.95 → gap $0.47 → skip.
+        # ------------------------------------------------------------------
+        if edge.direction == "BUY_YES":
+            market_side_bid = fresh_yes_bid
+        else:
+            if fresh_no_bid > 0.0:
+                market_side_bid = fresh_no_bid
+            elif fresh_yes_ask < 1.0:
+                market_side_bid = round(1.0 - fresh_yes_ask, 2)
+            else:
+                market_side_bid = 0.0
+
+        if market_side_bid > 0.0 and order_price < market_side_bid - COMPETITIVE_PRICE_THRESHOLD:
+            logger.info(
+                "Competitive price guard: %s order_price=%.2f too far below market bid=%.2f "
+                "(gap=%.2f, threshold=%.2f). Skipping.",
+                ticker, order_price, market_side_bid,
+                market_side_bid - order_price, COMPETITIVE_PRICE_THRESHOLD,
+            )
+            return _skipped(
+                ticker, edge,
+                skip_reason=(
+                    f"Order price ${order_price:.2f} is ${market_side_bid - order_price:.2f} "
+                    f"below market bid ${market_side_bid:.2f} — order would never fill"
+                ),
+                fresh_mid=fresh_mid,
+            )
 
         # ------------------------------------------------------------------
         # Step 4: Depth check

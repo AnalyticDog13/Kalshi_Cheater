@@ -21,6 +21,17 @@
 
 ---
 
+## CHANGES (session 18 — 2026-04-11)
+*Unfillable order guard added. Direction bug diagnostic added.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| FIX | `src/order_executor.py` | Added `COMPETITIVE_PRICE_THRESHOLD = 0.10` constant and **competitive price guard** (Step 3b) in `place_order()`. Before placing, computes the current market bid for the side being bought (`fresh_yes_bid` for BUY_YES; `fresh_no_bid` or `1 - fresh_yes_ask` for BUY_NO). If our limit price is more than 10¢ below that market bid, the order is skipped with a log message. Prevents unfillable orders — e.g. BUY_NO at $0.48 when NO is trading at $0.95 ($0.47 gap). |
+| DIAGNOSTIC | `src/order_executor.py` | Added `logger.info("place_order called: ... direction=...")` at the top of `place_order()`. This confirms whether `edge.direction` is already wrong on arrival (mutation upstream in scanner/daemon) or something inside the executor corrupts it. Required to root-cause the direction inversion bug observed in session 18 logs: scan logs BUY_YES for T74/T69 but executor places NO. Remove this line once root cause is identified and fixed. |
+| IDENTIFIED | `src/order_executor.py` | **Known direction inversion bug (not yet fixed):** For "above" markets where BUY_YES is correct (e.g. ensemble 95.7%, market 50%), the executor is placing BUY_NO instead. "Below" markets and BUY_NO markets execute correctly. Root cause not yet pinpointed — awaiting Step A diagnostic output from next live cycle. |
+
+**State as of end of session 18:** 39/39 order executor tests passing. Competitive price guard prevents unfillable orders from occupying resting slots. Direction bug still present but now caught by the guard for extreme-price cases. Diagnostic log added to identify mutation source next cycle.
+
 ## CHANGES (session 17 — 2026-04-04)
 *Stale-cancel churn loop fixed. Fill price extraction made robust. MAX_CONTRACT_PRICE raised.*
 

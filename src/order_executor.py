@@ -42,6 +42,7 @@ MIN_ORDER_PRICE: float = 0.01
 MAX_ORDER_PRICE: float = 0.99
 MAX_CONTRACT_PRICE: float = 0.80  # hard cap — never pay more than $0.80 per contract on empty book
 COMPETITIVE_PRICE_THRESHOLD: float = 0.10  # skip if our limit is >10¢ below the market bid for our side
+EMPTY_BOOK_PRICE_THRESHOLD: float = 0.30   # empty-book fallback: skip if >30¢ below ensemble-implied fair bid
 
 
 # ---------------------------------------------------------------------------
@@ -227,6 +228,35 @@ class OrderExecutor:
                 ),
                 fresh_mid=fresh_mid,
             )
+
+        # Empty-book fallback: when the orderbook returns no data, use ensemble fair value
+        # to estimate where the market should be. Kalshi weather books are often empty on
+        # new markets — but for near-certain outcomes the book has repriced and our $0.48
+        # fallback would never fill. Use a wider threshold (30¢) since fair value ≠ market
+        # price for mispriced markets we're trying to exploit.
+        #   BUY_NO: fair NO price ≈ 1 - fair_value. If we're >30¢ below that, skip.
+        #   BUY_YES: fair YES price ≈ fair_value.  If we're >30¢ below that, skip.
+        if market_side_bid == 0.0:
+            if edge.direction == "BUY_YES":
+                implied_fair_bid = edge.fair_value
+            else:
+                implied_fair_bid = 1.0 - edge.fair_value
+            if implied_fair_bid > 0.0 and order_price < implied_fair_bid - EMPTY_BOOK_PRICE_THRESHOLD:
+                logger.info(
+                    "Competitive price guard (empty book): %s order_price=%.2f far below "
+                    "fair bid=%.2f (gap=%.2f, threshold=%.2f). Skipping.",
+                    ticker, order_price, implied_fair_bid,
+                    implied_fair_bid - order_price, EMPTY_BOOK_PRICE_THRESHOLD,
+                )
+                return _skipped(
+                    ticker, edge,
+                    skip_reason=(
+                        f"Empty book: order ${order_price:.2f} is "
+                        f"${implied_fair_bid - order_price:.2f} below ensemble-implied "
+                        f"fair bid ${implied_fair_bid:.2f} — likely unfillable"
+                    ),
+                    fresh_mid=fresh_mid,
+                )
 
         # ------------------------------------------------------------------
         # Step 4: Depth check

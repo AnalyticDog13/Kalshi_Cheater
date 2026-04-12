@@ -21,6 +21,18 @@
 
 ---
 
+## CHANGES (session 19 — 2026-04-11)
+*Empty-book price guard added. Live-book guard behavior clarified. Test corrected.*
+
+| Change | File | Description |
+|--------|------|-------------|
+| FIX | `src/order_executor.py` | Added `EMPTY_BOOK_PRICE_THRESHOLD = 0.30` constant and **empty-book fallback guard** in `place_order()`. When `market_side_bid == 0.0` (fully empty book), uses ensemble `fair_value` as a proxy for the implied market bid (`fair_value` for BUY_YES, `1 - fair_value` for BUY_NO). If the order price is more than 30¢ below the implied fair bid, skips. Prevents unfillable empty-book orders on near-certain markets (e.g. BUY_NO at $0.48 when ensemble says YES=0.99 → implied NO bid=0.99, gap=0.51 → skip). Wider 30¢ threshold (vs 10¢ live-book) because fair value ≠ market price for genuinely mispriced markets we're trying to exploit. |
+| CLARIFICATION | `src/order_executor.py` | The live-book competitive price guard (Step 3b, session 18) cannot fire in practice: `order_price` and `market_side_bid` are computed with identical logic, so their gap is always ~0. The guard is harmless dead code — it would only matter if the order price computation logic diverged from the market bid computation. The real protection is the empty-book guard above. |
+| FIX | `tests/test_order_executor.py` | Rewrote `test_live_book_buy_no_far_below_derived_bid_skips` → `test_live_book_buy_no_derived_bid_places_at_market`. The original test had a false premise (assumed order_price would be $0.48 when yes_ask=0.05; it's actually derived as $0.95 = 1 - 0.05). New test confirms that BUY_NO with yes_ask=0.05 places at $0.95 (correct behavior — order price equals derived market bid, gap is 0). Added 4 new tests for the empty-book guard: extreme/moderate BUY_NO, extreme BUY_YES (places due to MAX_CONTRACT_PRICE cap), moderate BUY_YES. |
+| CONFIRMED | `src/order_executor.py` | Step A diagnostic log (session 18) confirmed direction is correct on arrival. The "direction inversion" observed in session 18 logs was a spurious second `compute_edge` call logged during the scan phase (exploratory arm uses raw/unflipped probability, producing a BUY_YES log for "below" markets). The actual stored edge and placed order direction are correct. Diagnostic log still present — remove in next session once no longer needed. |
+
+**State as of end of session 19:** 45/45 order executor tests passing. Empty-book guard now prevents unfillable orders on near-certain markets (e.g. fair_value=0.99 or 0.01). Moderate-edge empty-book orders still place. Direction behavior confirmed correct.
+
 ## CHANGES (session 18 — 2026-04-11)
 *Unfillable order guard added. Direction bug diagnostic added.*
 

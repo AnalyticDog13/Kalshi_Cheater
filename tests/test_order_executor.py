@@ -371,6 +371,113 @@ class TestDepthCheck:
 
 
 # ---------------------------------------------------------------------------
+# Competitive price guard — live book and empty-book fallback
+# ---------------------------------------------------------------------------
+
+class TestCompetitivePriceGuard:
+    def _empty_book(self) -> MagicMock:
+        """Book with no bids on either side (all fields absent or default)."""
+        book = MagicMock()
+        book.yes_bid_dollars = "0.0"
+        book.yes_ask_dollars = "1.0"
+        del book.no_bid_dollars
+        book.no_bid_size_fp = "0.0"
+        book.yes_bid_size_fp = "0.0"
+        return book
+
+    # ---- live book: order price derived from book, so it always equals the market bid ----
+
+    def test_live_book_buy_no_derived_bid_places_at_market(self):
+        """
+        yes_ask=0.05 → implied NO bid = 0.95. order_price is also derived as 1 - yes_ask = 0.95.
+        Gap between order_price and market_side_bid is 0 → guard does not fire → places at 0.95.
+        The live-book guard can only fire if order_price is computed differently from market_side_bid,
+        which does not happen in the current code (both use the same derivation logic).
+        """
+        executor, client = _make_executor()
+        # market_price=0.05 avoids staleness (fresh_mid will also be 0.05 from yes_ask)
+        edge = _mock_edge(direction="BUY_NO", market_price=0.05, fair_value=0.01)
+        book = MagicMock()
+        book.yes_bid_dollars = "0.0"
+        book.yes_ask_dollars = "0.05"   # YES selling cheap → NO bid ≈ 0.95
+        del book.no_bid_dollars
+        book.no_bid_size_fp = "0.0"
+        book.yes_bid_size_fp = "0.0"
+        client.get_orderbook.return_value = book
+        client.create_order.return_value = _mock_order()
+        result = _run(executor.place_order(edge, "KXHIGHCHI-26APR11-T58"))
+        assert result.was_placed is True
+        assert abs(result.price - 0.95) < 0.01
+
+    def test_live_book_buy_no_near_market_bid_places(self):
+        """
+        yes_ask=0.50 → implied NO bid = 0.50. Fallback order = 0.48. Gap 0.02 < threshold 0.10 → place.
+        """
+        executor, client = _make_executor()
+        edge = _mock_edge(direction="BUY_NO", market_price=0.50, fair_value=0.35)
+        book = MagicMock()
+        book.yes_bid_dollars = "0.0"
+        book.yes_ask_dollars = "0.50"   # YES ask at mid → NO bid ≈ 0.50
+        del book.no_bid_dollars
+        book.no_bid_size_fp = "0.0"
+        book.yes_bid_size_fp = "0.0"
+        client.get_orderbook.return_value = book
+        client.create_order.return_value = _mock_order()
+        result = _run(executor.place_order(edge, "KXHIGHLAX-26APR11-T68"))
+        assert result.was_placed is True
+
+    # ---- empty-book fallback guard ----
+
+    def test_empty_book_buy_no_extreme_fair_value_skips(self):
+        """
+        Empty book + BUY_NO + fair_value=0.01 → implied NO bid 0.99.
+        Fallback order = 0.48. Gap 0.51 > threshold 0.30 → skip.
+        """
+        executor, client = _make_executor()
+        edge = _mock_edge(direction="BUY_NO", market_price=0.50, fair_value=0.01)
+        client.get_orderbook.return_value = self._empty_book()
+        result = _run(executor.place_order(edge, "KXHIGHCHI-26APR11-T51"))
+        assert result.was_placed is False
+        assert "Empty book" in (result.skip_reason or "")
+
+    def test_empty_book_buy_no_moderate_fair_value_places(self):
+        """
+        Empty book + BUY_NO + fair_value=0.35 → implied NO bid 0.65.
+        Fallback order = 0.48. Gap 0.17 < threshold 0.30 → place.
+        """
+        executor, client = _make_executor()
+        edge = _mock_edge(direction="BUY_NO", market_price=0.50, fair_value=0.35)
+        client.get_orderbook.return_value = self._empty_book()
+        client.create_order.return_value = _mock_order()
+        result = _run(executor.place_order(edge, "KXHIGHLAX-26APR11-T71"))
+        assert result.was_placed is True
+
+    def test_empty_book_buy_yes_places_when_max_contract_price_limits_gap(self):
+        """
+        Empty book + BUY_YES + fair_value=0.99. Order price = min(0.97, MAX=0.80) = 0.80.
+        Gap vs implied bid 0.99 is only 0.19 < 0.30 → places (sellers would accept $0.80 for YES).
+        """
+        executor, client = _make_executor()
+        edge = _mock_edge(direction="BUY_YES", market_price=0.50, fair_value=0.99)
+        client.get_orderbook.return_value = self._empty_book()
+        client.create_order.return_value = _mock_order()
+        result = _run(executor.place_order(edge, "KXHIGHNY-26APR11-T51"))
+        assert result.was_placed is True
+
+    def test_empty_book_buy_yes_moderate_fair_value_places(self):
+        """
+        Empty book + BUY_YES + fair_value=0.65 → implied YES bid 0.65.
+        Order = fair_value - 0.02 = 0.63. Gap 0.02 < 0.30 → place.
+        """
+        executor, client = _make_executor()
+        edge = _mock_edge(direction="BUY_YES", market_price=0.50, fair_value=0.65)
+        client.get_orderbook.return_value = self._empty_book()
+        client.create_order.return_value = _mock_order()
+        result = _run(executor.place_order(edge, "KXHIGHNY-26APR12-T56"))
+        assert result.was_placed is True
+
+
+# ---------------------------------------------------------------------------
 # Successful placement
 # ---------------------------------------------------------------------------
 

@@ -534,8 +534,8 @@ class TradingDaemon:
                         open_orders_count, placed_this_cycle, max_orders,
                     )
                     break
-                await self._execute_trade(result)
-                placed_this_cycle += 1
+                if await self._execute_trade(result):
+                    placed_this_cycle += 1
 
         # --- 7. Daily summary + file reports -----------------------------
         today_utc = now_utc.date()
@@ -556,7 +556,7 @@ class TradingDaemon:
     # Trade execution (conservative arm)
     # ------------------------------------------------------------------
 
-    async def _execute_trade(self, result: ScanResult) -> None:
+    async def _execute_trade(self, result: ScanResult) -> bool:
         """
         Place a limit order for an approved scan result and record in tracker.
         Updates risk manager exposure after placement (not after fill —
@@ -567,7 +567,7 @@ class TradingDaemon:
                 "kalshi_api circuit OPEN — skipping order for %s",
                 result.market_ticker,
             )
-            return
+            return False
 
         try:
             order_result = await self.order_executor.place_order(
@@ -579,7 +579,7 @@ class TradingDaemon:
             just_tripped = self.health_monitor.record_failure("kalshi_api", str(exc))
             if just_tripped:
                 await self.notifier.send_circuit_breaker("kalshi_api", str(exc))
-            return
+            return False
 
         if not order_result.was_placed:
             logger.info(
@@ -587,7 +587,7 @@ class TradingDaemon:
                 result.market_ticker,
                 order_result.skip_reason,
             )
-            return
+            return False
 
         # Determine city from station mapping (fall back to result.city)
         station = self._station_mapping.get(result.series_ticker, {})
@@ -635,7 +635,7 @@ class TradingDaemon:
             logger.error(
                 "Failed to record trade %s in tracker: %s", trade_id, exc
             )
-            return
+            return False
 
         # Reserve exposure at order time (conservative: counts before fill)
         position_dollars = order_result.price * order_result.count
@@ -650,6 +650,7 @@ class TradingDaemon:
             order_result.price,
             result.edge.raw_edge * 100,
         )
+        return True
 
     # ------------------------------------------------------------------
     # Exploratory arm (paper-only)

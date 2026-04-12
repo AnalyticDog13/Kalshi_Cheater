@@ -191,8 +191,11 @@ class OrderExecutor:
                 # Derive NO bid from YES ask: NO bid ≈ 1 - YES ask
                 order_price = round(1.0 - fresh_yes_ask, 2)
             else:
-                # Full fallback: use entry_price - 2¢ buffer
-                order_price = round(edge.entry_price - 0.02, 2)
+                # Full fallback: use NO fair value (1 - ensemble fair value) - 2¢ buffer.
+                # Mirrors the BUY_YES fallback which uses fair_value - 0.02.
+                # entry_price (1 - market_price) would be wrong here when the market is at 50¢
+                # but ensemble strongly disagrees (e.g. NO should be 67¢, not 48¢).
+                order_price = round(1.0 - edge.fair_value - 0.02, 2)
 
         order_price = max(MIN_ORDER_PRICE, min(MAX_ORDER_PRICE, round(order_price, 2)))
 

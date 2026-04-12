@@ -274,10 +274,10 @@ class TestMakerPricingBuyNo:
         assert result.price == pytest.approx(0.34, abs=0.01)
         assert result.side == "no"
 
-    def test_buy_no_empty_book_uses_entry_price_minus_buffer(self):
-        """Full fallback for BUY_NO when all NO signals are absent."""
+    def test_buy_no_empty_book_uses_fair_value_minus_buffer(self):
+        """Full fallback for BUY_NO when all NO signals are absent: places at (1 - fair_value) - 2¢."""
         executor, client = _make_executor()
-        edge = _mock_edge(direction="BUY_NO", market_price=0.65, entry_price=0.35)
+        edge = _mock_edge(direction="BUY_NO", market_price=0.65, fair_value=0.35)
         book = MagicMock()
         # Simulate completely absent book fields
         book.yes_bid_dollars = "0.0"
@@ -290,8 +290,8 @@ class TestMakerPricingBuyNo:
 
         result = _run(executor.place_order(edge, "KXHIGHNY-26APR01-T72"))
 
-        # entry_price - 0.02 = 0.35 - 0.02 = 0.33
-        assert result.price == pytest.approx(0.33, abs=0.01)
+        # (1 - fair_value) - 0.02 = (1 - 0.35) - 0.02 = 0.63
+        assert result.price == pytest.approx(0.63, abs=0.01)
         assert result.was_placed is True
 
 
@@ -428,22 +428,25 @@ class TestCompetitivePriceGuard:
 
     # ---- empty-book fallback guard ----
 
-    def test_empty_book_buy_no_extreme_fair_value_skips(self):
+    def test_empty_book_buy_no_extreme_fair_value_places_near_fair_value(self):
         """
-        Empty book + BUY_NO + fair_value=0.01 → implied NO bid 0.99.
-        Fallback order = 0.48. Gap 0.51 > threshold 0.30 → skip.
+        Empty book + BUY_NO + fair_value=0.01 → order = (1-0.01) - 0.02 = 0.97.
+        Implied NO bid = 0.99. Gap = 0.02 < 0.30 → places at $0.97.
+        (With the fair-value-based fallback, BUY_NO empty-book orders are always
+        near the ensemble fair value, so the empty-book guard gap is always ~0.02.)
         """
         executor, client = _make_executor()
         edge = _mock_edge(direction="BUY_NO", market_price=0.50, fair_value=0.01)
         client.get_orderbook.return_value = self._empty_book()
+        client.create_order.return_value = _mock_order()
         result = _run(executor.place_order(edge, "KXHIGHCHI-26APR11-T51"))
-        assert result.was_placed is False
-        assert "Empty book" in (result.skip_reason or "")
+        assert result.was_placed is True
+        assert result.price == pytest.approx(0.97, abs=0.01)
 
     def test_empty_book_buy_no_moderate_fair_value_places(self):
         """
-        Empty book + BUY_NO + fair_value=0.35 → implied NO bid 0.65.
-        Fallback order = 0.48. Gap 0.17 < threshold 0.30 → place.
+        Empty book + BUY_NO + fair_value=0.35 → order = (1-0.35) - 0.02 = 0.63.
+        Implied NO bid = 0.65. Gap = 0.02 < threshold 0.30 → place at $0.63.
         """
         executor, client = _make_executor()
         edge = _mock_edge(direction="BUY_NO", market_price=0.50, fair_value=0.35)
@@ -451,6 +454,7 @@ class TestCompetitivePriceGuard:
         client.create_order.return_value = _mock_order()
         result = _run(executor.place_order(edge, "KXHIGHLAX-26APR11-T71"))
         assert result.was_placed is True
+        assert result.price == pytest.approx(0.63, abs=0.01)
 
     def test_empty_book_buy_yes_places_when_max_contract_price_limits_gap(self):
         """

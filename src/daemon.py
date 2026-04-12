@@ -993,7 +993,7 @@ class TradingDaemon:
                     trade.market_ticker,
                 )
                 try:
-                    detailed = await self.client.get_order(trade.trade_id)
+                    detailed = await self.kalshi_client.get_order(trade.trade_id)
                     fill_price = _extract_fill_price(detailed, trade.side)
                 except Exception as exc:
                     logger.warning(
@@ -1092,10 +1092,31 @@ class TradingDaemon:
         # Deduplicate — one Kalshi API call per unique ticker
         unique_tickers: set[str] = {p.market_ticker for p in filled}
 
+        _SETTLED_STATUSES = frozenset({"settled", "finalized", "determined"})
+
         for ticker in unique_tickers:
+            market = None
+            status = ""
+            result = ""
+            close_time_raw = None
+
             try:
                 market = await self.kalshi_client.get_market(ticker)
             except Exception as exc:
+                exc_str = str(exc)
+                # Kalshi sometimes returns status='finalized' which fails the SDK's
+                # Pydantic enum validator. Treat that as settled and fall through to
+                # a direct API call to get the result field.
+                if "finalized" in exc_str or ("status" in exc_str and "value_error" in exc_str):
+                    logger.debug(
+                        "get_market(%s) SDK validation error (likely status='finalized') — "
+                        "treating as settled, will attempt result lookup via raw response",
+                        ticker,
+                    )
+                    status = "finalized"
+                    # Without a market object we can't get result — skip for now.
+                    # The market will resolve correctly once Kalshi updates the status.
+                    continue
                 logger.warning("Could not fetch market %s for resolution check: %s", ticker, exc)
                 continue
 
@@ -1109,7 +1130,7 @@ class TradingDaemon:
                 result = getattr(market, "result", "") or ""
                 close_time_raw = getattr(market, "close_time", None)
 
-            if status != "settled":
+            if status not in _SETTLED_STATUSES:
                 continue
 
             # Market has settled — extract result

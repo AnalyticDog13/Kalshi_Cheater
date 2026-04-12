@@ -362,7 +362,7 @@ class KalshiClient:
         Fetch a single market by ticker.
 
         The SDK returns a GetMarketResponse wrapper; unwrap to the inner market
-        dict so callers can access fields directly (e.g. market['status']).
+        dict so callers can access fields directly (e.g. market.status).
         Falls back to the raw response if the inner attribute is absent.
         """
         raw = await self._call(

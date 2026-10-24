@@ -8,6 +8,7 @@ weather_series:
   temperature:
     # Format: KXHIGH{CITY_CODE} = daily high temperature markets
     # Verify each ticker against the live Kalshi API on startup.
+    # Live trades only ever landed in 5 cities: NY, CHI, LAX, MIA, DEN.
     - "KXHIGHNY"    # Highest temp in NYC (Central Park — station KNYC)
     - "KXHIGHCHI"   # Highest temp in Chicago (O'Hare — station KORD)
     - "KXHIGHLAX"   # Highest temp in Los Angeles (Downtown — station KCQT)

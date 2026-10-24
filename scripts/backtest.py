@@ -41,7 +41,7 @@ Notes:
     taker fills at market_price (with fee). Both are reported separately.
   - forecast mode requires one Previous Runs API call per city-date pair.
     These are cached in data/backtest_cache.db. First run for a year of
-    data across 10 cities takes ~15 minutes (rate limits permitting).
+    data across all mapped cities takes ~15 minutes (rate limits permitting).
 """
 
 from __future__ import annotations

@@ -416,7 +416,7 @@ python -m src.main stop
 
 ### Step 4 — Evaluate After ~100 Resolved Markets (2-4 weeks)
 
-Weather markets in the system's cities typically resolve once per day each. With 10 cities and daily markets, you should accumulate ~100+ resolved markets within 2-4 weeks of continuous operation.
+Weather markets in the system's cities typically resolve once per day each. The bot traded in 5 cities (New York, Chicago, Los Angeles, Miami, Denver); with daily markets in each, you should accumulate ~100+ resolved markets within 2-4 weeks of continuous operation.
 
 ```bash
 # Run after the daemon has been running for 2+ weeks
@@ -517,7 +517,7 @@ These are runtime issues that only reveal themselves when talking to live APIs. 
 | File | Notes |
 |------|-------|
 | `config/settings.yaml` | All tunable parameters; ensemble URL corrected to `ensemble-api.open-meteo.com` |
-| `config/station_mapping.yaml` | 10 cities with NWS station IDs and lat/lon |
+| `config/station_mapping.yaml` | NWS station IDs and lat/lon for every scanned series (trades landed in 5 cities: NY, CHI, LAX, MIA, DEN) |
 | `config/market_categories.yaml` | Whitelisted series tickers, exclusions |
 | `requirements.txt` | Added `cryptography>=42.0.0` (missing from spec, required by kalshi-python) |
 | `.env.example` | Template; real `.env` populated with live credentials |
